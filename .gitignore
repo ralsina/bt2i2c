@@ -1,0 +1,11 @@
+build/
+*.uf2
+*.elf
+*.hex
+*.bin
+*.o
+*.d
+*.map
+cmake-build-*/
+.idea/
+.vscode/
