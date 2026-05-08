@@ -1,8 +1,5 @@
 #include "bt_keyboard.h"
 #include "reg.h"
-#include "fifo.h"
-#include "interrupt.h"
-#include "pins.h"
 
 #include <btstack.h>
 #include <pico/cyw43_arch.h>
@@ -143,18 +140,17 @@ static uint8_t find_in_report(const uint8_t *report, uint8_t code)
 
 static void inject_key(char key, enum key_state state)
 {
-    struct fifo_item item = { .key = key, .state = state };
-
-    if (!fifo_enqueue(item)) {
-        if (reg_is_bit_set(REG_ID_CFG, CFG_OVERFLOW_ON)) {
-            fifo_flush();
-            fifo_enqueue_force(item);
-            if (reg_is_bit_set(REG_ID_CFG, CFG_OVERFLOW_INT)) {
-                reg_set_bit(REG_ID_INT, INT_OVERFLOW);
-            }
-        }
+    const char *s;
+    switch (state) {
+        case KEY_STATE_PRESSED:  s = "PRESSED";  break;
+        case KEY_STATE_HOLD:     s = "HOLD";     break;
+        case KEY_STATE_RELEASED: s = "RELEASED"; break;
+        default:                 s = "IDLE";     break;
     }
-    interrupt_pulse();
+    if (key >= 0x20 && key <= 0x7E)
+        printf("key: '%c' (0x%02x) %s\n", key, (uint8_t)key, s);
+    else
+        printf("key: 0x%02x %s\n", (uint8_t)key, s);
 }
 
 static char hid_code_to_char(uint8_t code, uint8_t modifiers, bool capslock)
@@ -311,7 +307,6 @@ static void packet_handler(uint8_t packet_type, uint16_t channel,
         case HCI_EVENT_DISCONNECTION_COMPLETE:
             printf("Disconnected\n");
             connected = false;
-            cyw43_arch_gpio_put(PICO_W_LED, 0);
             has_prev_report = false;
             has_target = false;
             scanning = true;
@@ -324,7 +319,6 @@ static void packet_handler(uint8_t packet_type, uint16_t channel,
                 if (hid_status == ERROR_CODE_SUCCESS) {
                     printf("HID service connected!\n");
                     connected = true;
-                    cyw43_arch_gpio_put(PICO_W_LED, 1);
                 } else {
                     printf("HID service connect failed: 0x%02x\n", hid_status);
                     gap_disconnect(le_connection_handle);
@@ -335,7 +329,6 @@ static void packet_handler(uint8_t packet_type, uint16_t channel,
         case GATTSERVICE_SUBEVENT_HID_SERVICE_DISCONNECTED:
             printf("HID service disconnected\n");
             connected = false;
-            cyw43_arch_gpio_put(PICO_W_LED, 0);
             has_prev_report = false;
             break;
 
@@ -352,7 +345,6 @@ static void packet_handler(uint8_t packet_type, uint16_t channel,
                             if (status == ERROR_CODE_SUCCESS) {
                                 printf("HID service connected!\n");
                                 connected = true;
-                                cyw43_arch_gpio_put(PICO_W_LED, 1);
                             } else {
                                 printf("HID service connect failed: 0x%02x\n", status);
                                 gap_disconnect(le_connection_handle);
@@ -360,7 +352,6 @@ static void packet_handler(uint8_t packet_type, uint16_t channel,
                         } else if (subevent == GATTSERVICE_SUBEVENT_HID_SERVICE_DISCONNECTED) {
                             printf("HID service disconnected\n");
                             connected = false;
-                            cyw43_arch_gpio_put(PICO_W_LED, 0);
                             has_prev_report = false;
                         } else if (subevent == GATTSERVICE_SUBEVENT_HID_REPORT) {
                             const uint8_t *report = gattservice_subevent_hid_report_get_report(packet);
@@ -452,7 +443,7 @@ int btstack_main(int argc, const char *argv[])
     sm_init();
 
     sm_set_io_capabilities(IO_CAPABILITY_NO_INPUT_NO_OUTPUT);
-    sm_set_authentication_requirements(SM_AUTHREQ_BONDING);
+    sm_set_authentication_requirements(SM_AUTHREQ_BONDING | SM_AUTHREQ_SECURE_CONNECTION);
 
     gatt_client_init();
     hids_client_init(hid_descriptor_storage, HID_DESCRIPTOR_STORAGE_SIZE);

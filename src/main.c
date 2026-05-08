@@ -4,13 +4,9 @@
 #include <stdio.h>
 
 #include "bt_keyboard.h"
-#include "i2c_slave.h"
-#include "reg.h"
-#include "interrupt.h"
 #include "pins.h"
 
 static btstack_timer_source_t heartbeat;
-static btstack_timer_source_t i2c_init_timer;
 
 static void heartbeat_handler(btstack_timer_source_t *ts)
 {
@@ -19,14 +15,6 @@ static void heartbeat_handler(btstack_timer_source_t *ts)
     printf("[%d] alive\n", count++);
     btstack_run_loop_set_timer(&heartbeat, 5000);
     btstack_run_loop_add_timer(&heartbeat);
-}
-
-static void i2c_init_handler(btstack_timer_source_t *ts)
-{
-    (void)ts;
-    interrupt_init();
-    i2c_slave_init();
-    printf("I2C slave initialized (address 0x%02x)\n", reg_get_value(REG_ID_ADR));
 }
 
 static void pulse_led(void)
@@ -53,12 +41,6 @@ int main(void)
 
     btstack_main(0, NULL);
     printf("btstack_main returned\n");
-
-    reg_init();
-
-    i2c_init_timer.process = &i2c_init_handler;
-    btstack_run_loop_set_timer(&i2c_init_timer, 2000);
-    btstack_run_loop_add_timer(&i2c_init_timer);
 
     heartbeat.process = &heartbeat_handler;
     btstack_run_loop_set_timer(&heartbeat, 1000);
