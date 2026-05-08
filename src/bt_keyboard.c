@@ -6,9 +6,12 @@
 #include <pico/btstack_cyw43.h>
 #include <ble/gatt-service/hids_client.h>
 #include <ble/sm.h>
+#include <hardware/uart.h>
 #include <string.h>
 #include <stdio.h>
 #include <inttypes.h>
+
+#include "pins.h"
 
 // Uncomment to skip scan and connect directly to a known device:
 // #define TARGET_BD_ADDR {0x54, 0x46, 0x6E, 0x00, 0x04, 0x8E}
@@ -190,6 +193,11 @@ static void process_hid_report(const uint8_t *report_buf, uint16_t buf_len, uint
         if (report[i]) printf("0x%02x ", report[i]);
     }
     printf("\n");
+
+    // Send raw HID report over UART: 0xFE + 8 report bytes
+    uint8_t frame[9] = {0xFE};
+    memcpy(frame + 1, report, HID_REPORT_SIZE);
+    uart_write_blocking(UART_ID, frame, 9);
 
     if (!find_in_prev(HID_KEY_CAPSLOCK) && find_in_report(report, HID_KEY_CAPSLOCK)) {
         capslock = !capslock;

@@ -2,12 +2,11 @@
 
 #include "pico.h"
 
-// I2C pins for the i2c_puppet protocol slave
-#define PIN_PUPPET_SDA    0
-#define PIN_PUPPET_SCL    1
-
-// Interrupt pin to the host (pulled low on key event)
-#define PIN_INT           2
+// UART pins to host (GP4 = TX, GP5 = RX)
+#define PIN_UART_TX         4
+#define PIN_UART_RX         5
+#define UART_ID             uart1
+#define UART_BAUD           115200
 
 // Pico W on-board LED via CYW43
-#define PICO_W_LED        0
+#define PICO_W_LED 0

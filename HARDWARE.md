@@ -7,9 +7,12 @@ Host I2C Port          Pico W         Pico W Pin Function
 ──────────────────────────────────────────────────────────
 3.3V (VCC)      ─────  Pin 39 (VSYS)  Power input (via SMPS)
 GND             ─────  Pin 38 (GND)   Common ground
-SDA             ─────  Pin 1  (GP0)   I2C data
-SCL             ─────  Pin 2  (GP1)   I2C clock
+SDA             ─────  Pin 6  (GP4)   I2C data
+SCL             ─────  Pin 7  (GP5)   I2C clock
 ```
+
+> Note: GP0 is used by the Pico W's CYW43 SPI bus for BT/Wi-Fi. The I2C
+> slave must use GP4/GP5 (or other free pins) to avoid BT connectivity loss.
 
 ## Notes
 

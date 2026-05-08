@@ -11,6 +11,7 @@ project(bt2i2c)
 pico_sdk_init()
 
 add_subdirectory(src)
+add_subdirectory(host/pico_receiver)
 
 pico_set_program_name(bt2i2c "BT2I2C Bridge")
 pico_set_program_version(bt2i2c "0.1")

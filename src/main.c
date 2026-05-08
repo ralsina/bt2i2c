@@ -1,5 +1,6 @@
 #include <pico/stdlib.h>
 #include <pico/cyw43_arch.h>
+#include <hardware/uart.h>
 #include <btstack.h>
 #include <stdio.h>
 
@@ -31,7 +32,13 @@ int main(void)
     // wait for USB serial to enumerate before first print
     sleep_ms(2000);
 
-    printf("BT2I2C Bridge init...\n");
+    printf("BT2UART Bridge init...\n");
+
+    // Init UART to host on GP4/TX GP5/RX
+    uart_init(UART_ID, UART_BAUD);
+    gpio_set_function(PIN_UART_TX, GPIO_FUNC_UART);
+    gpio_set_function(PIN_UART_RX, GPIO_FUNC_UART);
+    printf("UART init on GP%d/GP%d at %d baud\n", PIN_UART_TX, PIN_UART_RX, UART_BAUD);
 
     if (cyw43_arch_init()) {
         printf("cyw43_arch_init FAILED\n");
