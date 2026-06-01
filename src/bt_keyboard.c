@@ -6,12 +6,12 @@
 #include <pico/btstack_cyw43.h>
 #include <ble/gatt-service/hids_client.h>
 #include <ble/sm.h>
-#include <hardware/uart.h>
 #include <string.h>
 #include <stdio.h>
 #include <inttypes.h>
 
-#include "pins.h"
+#include "fifo.h"
+#include "reg.h"
 
 // Uncomment to skip scan and connect directly to a known device:
 // #define TARGET_BD_ADDR {0x54, 0x46, 0x6E, 0x00, 0x04, 0x8E}
@@ -311,7 +311,7 @@ static void process_hid_report(const uint8_t *report_buf, uint16_t buf_len, uint
         }
     }
 
-    // Use the modified report for UART transmission and processing
+    // Use the modified report for FIFO enqueue and processing
     const uint8_t *final_report = fn_pressed ? modified_report : report;
 
     printf("report: rid=%u mod=0x%02x keys=", report_id, modifiers);
@@ -320,28 +320,56 @@ static void process_hid_report(const uint8_t *report_buf, uint16_t buf_len, uint
     }
     printf("\n");
 
-    // Send (possibly modified) HID report over UART: 0xFE + 8 report bytes
-    uint8_t frame[9] = {0xFE};
-    memcpy(frame + 1, final_report, HID_REPORT_SIZE);
-    uart_write_blocking(UART_ID, frame, 9);
+    // Enqueue key events into I2C slave FIFO
+    uint8_t mod_changes = modifiers ^ prev_mod;
+    if (mod_changes & (HID_MOD_LCTRL | HID_MOD_RCTRL)) {
+        struct fifo_item item = {
+            .key = KEY_MOD_SYM,
+            .state = (modifiers & (HID_MOD_LCTRL | HID_MOD_RCTRL))
+                ? KEY_STATE_PRESSED : KEY_STATE_RELEASED,
+        };
+        fifo_enqueue_force(item);
+    }
+    if (mod_changes & (HID_MOD_LSHIFT | HID_MOD_RSHIFT)) {
+        struct fifo_item item = {
+            .key = KEY_MOD_SHL,
+            .state = (modifiers & (HID_MOD_LSHIFT | HID_MOD_RSHIFT))
+                ? KEY_STATE_PRESSED : KEY_STATE_RELEASED,
+        };
+        fifo_enqueue_force(item);
+    }
+    if (mod_changes & (HID_MOD_LALT | HID_MOD_RALT)) {
+        struct fifo_item item = {
+            .key = KEY_MOD_ALT,
+            .state = (modifiers & (HID_MOD_LALT | HID_MOD_RALT))
+                ? KEY_STATE_PRESSED : KEY_STATE_RELEASED,
+        };
+        fifo_enqueue_force(item);
+    }
+
+    for (int i = 2; i < HID_REPORT_SIZE; i++) {
+        uint8_t code = final_report[i];
+        if (code == 0 || code == HID_KEY_CAPSLOCK) continue;
+        if (has_prev_report && find_in_prev(code)) continue;
+
+        struct fifo_item item = { .key = code, .state = KEY_STATE_PRESSED };
+        fifo_enqueue_force(item);
+    }
+
+    if (has_prev_report) {
+        for (int i = 2; i < HID_REPORT_SIZE; i++) {
+            uint8_t code = prev_report[i];
+            if (code == 0 || code == HID_KEY_CAPSLOCK) continue;
+            if (find_in_report(report, code)) continue;
+
+            struct fifo_item item = { .key = code, .state = KEY_STATE_RELEASED };
+            fifo_enqueue_force(item);
+        }
+    }
 
     if (!find_in_prev(HID_KEY_CAPSLOCK) && find_in_report(final_report, HID_KEY_CAPSLOCK)) {
         capslock = !capslock;
         printf("capslock: %s\n", capslock ? "ON" : "OFF");
-    }
-
-    uint8_t mod_changes = modifiers ^ prev_mod;
-    if (mod_changes & (HID_MOD_LSHIFT | HID_MOD_RSHIFT)) {
-        inject_key(KEY_MOD_SHL, modifiers & (HID_MOD_LSHIFT | HID_MOD_RSHIFT)
-            ? KEY_STATE_PRESSED : KEY_STATE_RELEASED);
-    }
-    if (mod_changes & (HID_MOD_LALT | HID_MOD_RALT)) {
-        inject_key(KEY_MOD_ALT, modifiers & (HID_MOD_LALT | HID_MOD_RALT)
-            ? KEY_STATE_PRESSED : KEY_STATE_RELEASED);
-    }
-    if (mod_changes & (HID_MOD_LCTRL | HID_MOD_RCTRL)) {
-        inject_key(KEY_MOD_SYM, modifiers & (HID_MOD_LCTRL | HID_MOD_RCTRL)
-            ? KEY_STATE_PRESSED : KEY_STATE_RELEASED);
     }
 
     for (int i = 2; i < HID_REPORT_SIZE; i++) {

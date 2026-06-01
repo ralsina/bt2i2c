@@ -1,70 +1,27 @@
-# Makefile for BT2UART Bridge
-# Simplifies building the Pico W firmware
+# Makefile for BT2I2C Bridge
+# Builds the Pico W BLE-to-I2C keyboard bridge firmware
 
-.PHONY: all clean sender receiver flash-sender flash-receiver help
+.PHONY: all clean flash help
 
-# Default target - build both firmwares
-all: sender receiver
-
-# Build sender firmware (Pico W)
-sender:
-	@echo "Building BT2UART sender firmware..."
+all:
+	@echo "Building BT2I2C sender firmware..."
 	@if [ ! -d build ]; then mkdir build && cd build && cmake ..; fi
-	@cd build && make bt2uart
-	@echo "✅ Sender firmware built: build/src/bt2uart.uf2"
+	@cd build && make bt2i2c
+	@echo "Firmware built: build/src/bt2i2c.uf2"
 
-# Build receiver firmware (Pico)
-receiver:
-	@echo "Building Pico receiver firmware..."
-	@if [ ! -d build ]; then mkdir build && cd build && cmake ..; fi
-	@cd build && make pico_receiver
-	@echo "✅ Receiver firmware built: build/host/pico_receiver/pico_receiver.uf2"
-
-# Clean build artifacts
 clean:
-	@echo "Cleaning build directory..."
 	@rm -rf build
-	@echo "✅ Build directory cleaned"
+	@echo "Build directory cleaned"
 
-# Flash sender to Pico W (copies UF2 to current directory for easy access)
-flash-sender: sender
-	@echo "📋 Flash bt2uart.uf2 to your Pico W:"
-	@echo "1. Hold BOOTSEL button on Pico W"
-	@echo "2. Connect USB cable (while holding BOOTSEL)"
-	@echo "3. Copy build/src/bt2uart.uf2 to the RPI-RP2 drive"
-	@echo ""
-	@echo "Location: $(PWD)/build/src/bt2uart.uf2"
-	@echo ""
-	@ls -lh build/src/bt2uart.uf2
+flash:
+	@echo "Flash build/src/bt2i2c.uf2 to your Pico W (hold BOOTSEL)"
+	@ls -lh build/src/bt2i2c.uf2
 
-# Flash receiver to Pico
-flash-receiver: receiver
-	@echo "📋 Flash pico_receiver.uf2 to your Pico:"
-	@echo "1. Hold BOOTSEL button on Pico"
-	@echo "2. Connect USB cable (while holding BOOTSEL)"
-	@echo "3. Copy build/host/pico_receiver/pico_receiver.uf2 to the RPI-RP2 drive"
-	@echo ""
-	@echo "Location: $(PWD)/build/host/pico_receiver/pico_receiver.uf2"
-	@echo ""
-	@ls -lh build/host/pico_receiver/pico_receiver.uf2
-
-# Show help
 help:
-	@echo "BT2UART Bridge - Build Commands"
+	@echo "BT2I2C Bridge - Build Commands"
 	@echo ""
-	@echo "Usage: make [target]"
+	@echo "  make      Build firmware (build/src/bt2i2c.uf2)"
+	@echo "  make clean   Remove build directory"
+	@echo "  make flash   Show flashing instructions"
 	@echo ""
-	@echo "Targets:"
-	@echo "  all              Build both sender and receiver (default)"
-	@echo "  sender           Build Pico W sender firmware only"
-	@echo "  receiver         Build Pico receiver firmware only"
-	@echo "  clean            Remove build directory"
-	@echo "  flash-sender     Build sender and show flashing instructions"
-	@echo "  flash-receiver   Build receiver and show flashing instructions"
-	@echo "  help             Show this help message"
-	@echo ""
-	@echo "Examples:"
-	@echo "  make              # Build everything"
-	@echo "  make sender       # Build only Pico W firmware"
-	@echo "  make clean        # Clean build artifacts"
-	@echo "  make flash-sender # Build and get sender UF2 ready to flash"
+	@echo "Host: use Arduino/CircuitPython BBQ10KBD library (I2C addr 0x1F)"

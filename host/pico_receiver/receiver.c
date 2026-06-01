@@ -1,16 +1,31 @@
 #include <pico/stdlib.h>
-#include <hardware/uart.h>
+#include <hardware/i2c.h>
 #include <stdio.h>
 #include <string.h>
 
-#define UART_ID    uart1
-#define PIN_RX     5
-#define BAUD_RATE  115200
+#define I2C_INST     i2c0
+#define PIN_SDA      4
+#define PIN_SCL      5
+#define I2C_ADDR     0x1F
+#define I2C_SPEED    100000
 
-#define HID_REPORT_SIZE 8
-#define SYNC_BYTE       0xFE
+#define REG_ID_VER   0x01
+#define REG_ID_CFG   0x02
+#define REG_ID_INT   0x03
+#define REG_ID_KEY   0x04
+#define REG_ID_FIF   0x09
 
-static const char *key_names[0x53] = {
+#define KEY_COUNT_MASK 0x1F
+
+enum key_state
+{
+    KEY_STATE_IDLE = 0,
+    KEY_STATE_PRESSED,
+    KEY_STATE_HOLD,
+    KEY_STATE_RELEASED,
+};
+
+static const char *key_names[0x9E] = {
     [0x00] = "None",
     [0x04] = "A", [0x05] = "B", [0x06] = "C", [0x07] = "D",
     [0x08] = "E", [0x09] = "F", [0x0A] = "G", [0x0B] = "H",
@@ -28,104 +43,78 @@ static const char *key_names[0x53] = {
     [0x31] = "\\", [0x32] = "#", [0x33] = ";", [0x34] = "'",
     [0x35] = "`", [0x36] = ",", [0x37] = ".", [0x38] = "/",
     [0x39] = "CapsLock",
+    [0x3A] = "F1", [0x3B] = "F2", [0x3C] = "F3", [0x3D] = "F4",
+    [0x3E] = "F5", [0x3F] = "F6", [0x40] = "F7", [0x41] = "F8",
+    [0x42] = "F9", [0x43] = "F10", [0x44] = "F11", [0x45] = "F12",
     [0x4C] = "Delete",
+    [0x9A] = "Alt", [0x9B] = "LShift", [0x9C] = "RShift", [0x9D] = "Sym",
 };
 
-static const char *mod_names[8] = {
-    "LCtrl", "LShift", "LAlt", "LGui",
-    "RCtrl", "RShift", "RAlt", "RGui",
+static const char *state_names[4] = {
+    "IDLE", "PRESSED", "HOLD", "RELEASED"
 };
 
-static uint8_t prev_report[HID_REPORT_SIZE];
-static bool has_prev = false;
-
-static bool read_frame(uint8_t *report)
+static int reg_read(uint8_t reg, uint8_t *buf, uint8_t len)
 {
-    uint8_t sync;
-    while (true) {
-        int c = uart_getc(UART_ID);
-        if (c == PICO_ERROR_TIMEOUT) continue;
-        sync = (uint8_t)c;
-        if (sync == SYNC_BYTE) break;
-    }
-
-    for (int i = 0; i < HID_REPORT_SIZE; i++) {
-        int c = uart_getc(UART_ID);
-        if (c == PICO_ERROR_TIMEOUT) {
-            printf("TIMEOUT reading report byte %d\n", i);
-            return false;
-        }
-        report[i] = (uint8_t)c;
-    }
-    return true;
+    int ret = i2c_write_blocking(I2C_INST, I2C_ADDR, &reg, 1, true);
+    if (ret != 1) return -1;
+    return i2c_read_blocking(I2C_INST, I2C_ADDR, buf, len, false);
 }
 
-static void print_key_event(const char *name, bool pressed)
+static int reg_read_byte(uint8_t reg)
 {
-    printf("KEY %s: %s\n", pressed ? "press" : "release", name);
-}
-
-static void process_report(const uint8_t *report)
-{
-    uint8_t mod = report[0];
-    uint8_t prev_mod = has_prev ? prev_report[0] : 0;
-
-    uint8_t mod_changes = mod ^ prev_mod;
-    for (int m = 0; m < 8; m++) {
-        if (mod_changes & (1 << m)) {
-            print_key_event(mod_names[m], mod & (1 << m));
-        }
-    }
-
-    for (int i = 2; i < HID_REPORT_SIZE; i++) {
-        uint8_t code = report[i];
-        if (code == 0 || code > 0x52) continue;
-
-        bool in_prev = false;
-        if (has_prev) {
-            for (int j = 2; j < HID_REPORT_SIZE; j++) {
-                if (prev_report[j] == code) { in_prev = true; break; }
-            }
-        }
-
-        bool in_cur = false;
-        for (int j = 2; j < HID_REPORT_SIZE; j++) {
-            if (report[j] == code) { in_cur = true; break; }
-        }
-
-        const char *name = key_names[code] ? key_names[code] : "Unknown";
-        if (in_cur && !in_prev)
-            print_key_event(name, true);
-        else if (!in_cur && in_prev)
-            print_key_event(name, false);
-    }
-
-    memcpy(prev_report, report, HID_REPORT_SIZE);
-    has_prev = true;
+    uint8_t val;
+    if (reg_read(reg, &val, 1) != 1) return -1;
+    return val;
 }
 
 int main(void)
 {
     stdio_init_all();
     sleep_ms(2000);
-    printf("Pico Receiver starting...\n");
+    printf("Pico I2C Receiver starting...\n");
 
-    uart_init(UART_ID, BAUD_RATE);
-    gpio_set_function(PIN_RX, GPIO_FUNC_UART);
-    uart_set_fifo_enabled(UART_ID, false);
+    i2c_init(I2C_INST, I2C_SPEED);
+    gpio_set_function(PIN_SDA, GPIO_FUNC_I2C);
+    gpio_pull_up(PIN_SDA);
+    gpio_set_function(PIN_SCL, GPIO_FUNC_I2C);
+    gpio_pull_up(PIN_SCL);
 
-    printf("Listening on UART1 GP%d at %d baud (sync=0x%02X)\n",
-           PIN_RX, BAUD_RATE, SYNC_BYTE);
+    sleep_ms(100);
 
-    uint8_t report[HID_REPORT_SIZE];
+    int ver = reg_read_byte(REG_ID_VER);
+    if (ver < 0) {
+        printf("No I2C device found at 0x%02X!\n", I2C_ADDR);
+    } else {
+        printf("BT2I2C firmware v%d.%d detected\n", ver >> 4, ver & 0x0F);
+    }
+
+    uint8_t fifo_buf[2];
     while (true) {
-        if (read_frame(report)) {
-            printf("RAW: ");
-            for (int i = 0; i < HID_REPORT_SIZE; i++)
-                printf("%02x ", report[i]);
-            printf("\n");
-            process_report(report);
+        int key_val = reg_read_byte(REG_ID_KEY);
+        if (key_val < 0) {
+            sleep_ms(10);
+            continue;
         }
+
+        uint8_t count = key_val & KEY_COUNT_MASK;
+        if (count == 0) {
+            sleep_ms(5);
+            continue;
+        }
+
+        for (uint8_t i = 0; i < count; i++) {
+            if (reg_read(REG_ID_FIF, fifo_buf, 2) != 2) {
+                break;
+            }
+
+            uint8_t state = fifo_buf[0];
+            uint8_t key = fifo_buf[1];
+            const char *name = key_names[key] ? key_names[key] : "Unknown";
+            const char *sname = state < 4 ? state_names[state] : "?";
+            printf("KEY %s: %s (0x%02x)\n", sname, name, key);
+        }
+
         tight_loop_contents();
     }
 }

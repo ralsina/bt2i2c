@@ -13,7 +13,7 @@ add_executable(pico_receiver
 
 target_link_libraries(pico_receiver
     pico_stdlib
-    hardware_uart
+    hardware_i2c
 )
 
 pico_enable_stdio_uart(pico_receiver 0)

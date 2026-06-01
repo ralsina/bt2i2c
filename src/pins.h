@@ -2,11 +2,10 @@
 
 #include "pico.h"
 
-// UART pins to host (GP4 = TX, GP5 = RX)
-#define PIN_UART_TX         4
-#define PIN_UART_RX         5
-#define UART_ID             uart1
-#define UART_BAUD           115200
+// I2C pins to host (GP4 = SDA, GP5 = SCL) using I2C0
+#define PIN_I2C_SDA         4
+#define PIN_I2C_SCL         5
+#define I2C_INST            i2c0
 
 // Pico W on-board LED via CYW43
 #define PICO_W_LED 0
