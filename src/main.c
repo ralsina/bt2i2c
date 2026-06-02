@@ -12,7 +12,6 @@
 
 static btstack_timer_source_t heartbeat;
 static bool pairing_button_pressed = false;
-static bool bootsel_button_pressed = false;
 
 static void heartbeat_handler(btstack_timer_source_t *ts)
 {
@@ -49,8 +48,6 @@ static void pairing_button_irq(uint gpio, uint32_t events)
         // Button pressed (pull-up, so falling edge = press)
         if (gpio == PIN_PAIRING_BUTTON) {
             pairing_button_pressed = true;
-        } else if (gpio == PIN_BOOTSEL) {
-            bootsel_button_pressed = true;
         }
     }
 }
@@ -64,19 +61,6 @@ static void check_pairing_button(btstack_timer_source_t *ts)
         if (!gpio_get(PIN_PAIRING_BUTTON)) {
             printf("\n🔘 PAIRING BUTTON PRESSED!\n");
             display_log("PAIRING button pressed");
-            bt_keyboard_start_pairing();
-        }
-    }
-
-    if (bootsel_button_pressed) {
-        bootsel_button_pressed = false;
-
-        // Debounce: check if button is still low
-        if (!gpio_get(PIN_BOOTSEL)) {
-            printf("\n🔘 BOOTSSEL BUTTON PRESSED!\n");
-            display_log("BOOTSSEL button pressed");
-            // For now, same functionality as pairing button
-            // Can be changed later for different behavior
             bt_keyboard_start_pairing();
         }
     }
@@ -123,17 +107,6 @@ int main(void)
     printf("✅ Pairing button initialized (GP%d)\n", PIN_PAIRING_BUTTON);
     display_log("Pairing button ready");
 
-    // Initialize BOOTSSEL button (built-in button on Pico W)
-    gpio_init(PIN_BOOTSEL);
-    gpio_set_dir(PIN_BOOTSEL, GPIO_IN);
-    gpio_pull_up(PIN_BOOTSEL);
-    gpio_set_irq_enabled_with_callback(PIN_BOOTSEL,
-                                       GPIO_IRQ_EDGE_FALL,
-                                       true,
-                                       pairing_button_irq);
-    printf("✅ BOOTSSEL button initialized (GP%d - built-in)\n", PIN_BOOTSEL);
-    display_log("BOOTSSEL button ready");
-
     if (cyw43_arch_init()) {
         printf("❌ cyw43_arch_init FAILED\n");
         display_log("ERROR: WiFi/BLE failed");
@@ -167,7 +140,7 @@ int main(void)
     printf("   Put your keyboard in pairing mode\n");
     printf("   LED will light when connected\n");
     printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
-    printf("🔘 Press button on GP%d or BOOTSSEL to force pairing\n", PIN_PAIRING_BUTTON);
+    printf("🔘 Press button on GP%d to force pairing\n", PIN_PAIRING_BUTTON);
     printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
 
     display_log("Searching for keyboard...");

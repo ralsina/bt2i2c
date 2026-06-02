@@ -16,9 +16,8 @@
 // Pairing button - connect GP22 to GND for momentary switch
 #define PIN_PAIRING_BUTTON 22
 
-// BOOTSSEL button - built-in button on Pico W (GPIO 21)
-// Can be used as a general-purpose button when not in BOOTSEL mode
-#define PIN_BOOTSEL 21
+// Note: Built-in BOOTSSEL button is not accessible as GPIO on Pico W
+// Use external pairing button on GP22 instead
 
 // ST7789 Display pins (SPI)
 #define SPI_PORT      0   // Use SPI0 for display
