@@ -1,6 +1,7 @@
 *.3mf
 *.FCBak
-build/
+build/*
+!3rdparty/
 *.uf2
 *.elf
 *.hex
