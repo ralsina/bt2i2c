@@ -1,3 +1,5 @@
+*.3mf
+*.FCBak
 build/
 *.uf2
 *.elf
