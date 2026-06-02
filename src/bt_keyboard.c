@@ -1,3 +1,4 @@
+#include "display.h"
 #include "bt_keyboard.h"
 
 #include <btstack.h>
@@ -223,6 +224,11 @@ static void inject_key(char key, enum key_state state)
         printf("key: '%c' (0x%02x) %s\n", key, (uint8_t)key, s);
     } else {
         printf("key: 0x%02x %s\n", (uint8_t)key, s);
+
+    // Show key event on display
+    if (state == KEY_STATE_PRESSED || state == KEY_STATE_RELEASED) {
+        display_show_key_event(key, state == KEY_STATE_PRESSED);
+    }
     }
 }
 
@@ -745,4 +751,75 @@ bool bt_keyboard_reconnect_if_needed(void)
 bool bt_keyboard_is_connected(void)
 {
     return connected;
+}
+
+void bt_keyboard_start_pairing(void)
+{
+    extern sm_state_t current_sm_state;
+    extern hci_con_handle_t le_connection_handle;
+    extern bool scanning;
+    extern bool connected;
+    
+    printf("[PAIRING] Manual pairing triggered\n");
+    
+    // Disconnect if connected
+    if (connected && le_connection_handle != HCI_CON_HANDLE_INVALID) {
+        printf("[PAIRING] Disconnecting current keyboard\n");
+        gap_disconnect(le_connection_handle);
+        connected = false;
+        le_connection_handle = HCI_CON_HANDLE_INVALID;
+    }
+    
+    // Stop scanning if currently scanning
+    if (scanning) {
+        printf("[PAIRING] Stopping current scan\n");
+        gap_stop_scan();
+        scanning = false;
+    }
+    
+    // Reset to IDLE state
+    set_sm_state(SM_STATE_IDLE);
+    
+    // Start fresh scan for new keyboard
+    printf("[PAIRING] Starting scan for new keyboard\n");
+    printf("[PAIRING] Put your keyboard in pairing mode now!\n");
+    gap_set_scan_parameters(1, 0x100, 0x50);
+    gap_start_scan();
+    scanning = true;
+    set_sm_state(SM_STATE_SCANNING);
+}
+
+// Display callbacks (weak symbols - can be overridden)
+__attribute__((weak)) void display_show_scanning(void) {}
+__attribute__((weak)) void display_show_connecting(const char *device_name) {}
+__attribute__((weak)) void display_show_connected(const char *device_name) {}
+__attribute__((weak)) void display_show_disconnected(void) {}
+__attribute__((weak)) void display_show_key_event(char key, bool pressed) {}
+
+// Modified state setter with display updates
+static void set_sm_state_with_display(sm_state_t new_state, const char *device_info) {
+    if (current_sm_state == new_state) return;
+    printf("[SM_STATE] %s -> %s\n", sm_state_names[current_sm_state], sm_state_names[new_state]);
+    current_sm_state = new_state;
+
+    // Update display based on new state
+    switch (new_state) {
+        case SM_STATE_SCANNING:
+            display_show_scanning();
+            break;
+        case SM_STATE_CONNECTING:
+        case SM_STATE_PAIRING:
+        case SM_STATE_HID_CONNECTING:
+            display_show_connecting(device_info ? device_info : "Keyboard");
+            break;
+        case SM_STATE_CONNECTED:
+            display_show_connected(device_info ? device_info : "Keyboard");
+            break;
+        case SM_STATE_IDLE:
+        case SM_STATE_RECONNECT_WAIT:
+            display_show_disconnected();
+            break;
+        default:
+            break;
+    }
 }

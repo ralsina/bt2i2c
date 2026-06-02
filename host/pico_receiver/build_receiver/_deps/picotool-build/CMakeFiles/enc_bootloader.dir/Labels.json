@@ -1,0 +1,43 @@
+{
+	"sources" : 
+	[
+		{
+			"file" : "/home/ralsina/code/terminado/bt2i2c/host/pico_receiver/build_receiver/_deps/picotool-build/CMakeFiles/enc_bootloader"
+		},
+		{
+			"file" : "/home/ralsina/code/terminado/bt2i2c/host/pico_receiver/build_receiver/_deps/picotool-build/CMakeFiles/enc_bootloader.rule"
+		},
+		{
+			"file" : "/home/ralsina/code/terminado/bt2i2c/host/pico_receiver/build_receiver/_deps/picotool-build/CMakeFiles/enc_bootloader-complete.rule"
+		},
+		{
+			"file" : "/home/ralsina/code/terminado/bt2i2c/host/pico_receiver/build_receiver/_deps/picotool-build/enc_bootloader/src/enc_bootloader-stamp/enc_bootloader-build.rule"
+		},
+		{
+			"file" : "/home/ralsina/code/terminado/bt2i2c/host/pico_receiver/build_receiver/_deps/picotool-build/enc_bootloader/src/enc_bootloader-stamp/enc_bootloader-configure.rule"
+		},
+		{
+			"file" : "/home/ralsina/code/terminado/bt2i2c/host/pico_receiver/build_receiver/_deps/picotool-build/enc_bootloader/src/enc_bootloader-stamp/enc_bootloader-download.rule"
+		},
+		{
+			"file" : "/home/ralsina/code/terminado/bt2i2c/host/pico_receiver/build_receiver/_deps/picotool-build/enc_bootloader/src/enc_bootloader-stamp/enc_bootloader-install.rule"
+		},
+		{
+			"file" : "/home/ralsina/code/terminado/bt2i2c/host/pico_receiver/build_receiver/_deps/picotool-build/enc_bootloader/src/enc_bootloader-stamp/enc_bootloader-mkdir.rule"
+		},
+		{
+			"file" : "/home/ralsina/code/terminado/bt2i2c/host/pico_receiver/build_receiver/_deps/picotool-build/enc_bootloader/src/enc_bootloader-stamp/enc_bootloader-patch.rule"
+		},
+		{
+			"file" : "/home/ralsina/code/terminado/bt2i2c/host/pico_receiver/build_receiver/_deps/picotool-build/enc_bootloader/src/enc_bootloader-stamp/enc_bootloader-update.rule"
+		}
+	],
+	"target" : 
+	{
+		"labels" : 
+		[
+			"enc_bootloader"
+		],
+		"name" : "enc_bootloader"
+	}
+}

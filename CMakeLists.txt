@@ -1,17 +1,17 @@
 cmake_minimum_required(VERSION 3.13)
 
-set(PICO_PLATFORM "rp2040")
-set(PICO_BOARD "pico_w")
+# Set board to Pico W for BLE support
+set(PICO_BOARD pico_w)
 
-set(PICO_SDK_PATH "${CMAKE_CURRENT_LIST_DIR}/3rdparty/pico-sdk")
-include(3rdparty/pico-sdk/external/pico_sdk_import.cmake)
+# Initialize the SDK - use local copy from terminado project
+set(PICO_SDK_PATH "/home/ralsina/code/terminado/bt2i2c/3rdparty/pico-sdk")
+include(pico_sdk_import.cmake)
 
-project(bt2i2c)
-
+# Build the project
 pico_sdk_init()
 
-add_subdirectory(src)
+# Define the project
+project(bt2i2c_ble C CXX ASM)
 
-pico_set_program_name(bt2i2c "BT2I2C Bridge")
-pico_set_program_version(bt2i2c "0.3")
-pico_enable_stdio_uart(bt2i2c 1)
+# Add subdirectory
+add_subdirectory(src)

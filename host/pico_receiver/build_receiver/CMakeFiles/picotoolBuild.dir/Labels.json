@@ -1,0 +1,46 @@
+{
+	"sources" : 
+	[
+		{
+			"file" : "/home/ralsina/code/terminado/bt2i2c/host/pico_receiver/build_receiver/CMakeFiles/picotoolBuild"
+		},
+		{
+			"file" : "/home/ralsina/code/terminado/bt2i2c/host/pico_receiver/build_receiver/CMakeFiles/picotoolBuild.rule"
+		},
+		{
+			"file" : "/home/ralsina/code/terminado/bt2i2c/host/pico_receiver/build_receiver/CMakeFiles/picotoolBuild-complete.rule"
+		},
+		{
+			"file" : "/home/ralsina/code/terminado/bt2i2c/host/pico_receiver/build_receiver/picotool/src/picotoolBuild-stamp/picotoolBuild-build.rule"
+		},
+		{
+			"file" : "/home/ralsina/code/terminado/bt2i2c/host/pico_receiver/build_receiver/picotool/src/picotoolBuild-stamp/picotoolBuild-configure.rule"
+		},
+		{
+			"file" : "/home/ralsina/code/terminado/bt2i2c/host/pico_receiver/build_receiver/picotool/src/picotoolBuild-stamp/picotoolBuild-download.rule"
+		},
+		{
+			"file" : "/home/ralsina/code/terminado/bt2i2c/host/pico_receiver/build_receiver/picotool/src/picotoolBuild-stamp/picotoolBuild-install.rule"
+		},
+		{
+			"file" : "/home/ralsina/code/terminado/bt2i2c/host/pico_receiver/build_receiver/picotool/src/picotoolBuild-stamp/picotoolBuild-mkdir.rule"
+		},
+		{
+			"file" : "/home/ralsina/code/terminado/bt2i2c/host/pico_receiver/build_receiver/picotool/src/picotoolBuild-stamp/picotoolBuild-patch.rule"
+		},
+		{
+			"file" : "/home/ralsina/code/terminado/bt2i2c/host/pico_receiver/build_receiver/picotool/src/picotoolBuild-stamp/picotoolBuild-test.rule"
+		},
+		{
+			"file" : "/home/ralsina/code/terminado/bt2i2c/host/pico_receiver/build_receiver/picotool/src/picotoolBuild-stamp/picotoolBuild-update.rule"
+		}
+	],
+	"target" : 
+	{
+		"labels" : 
+		[
+			"picotoolBuild"
+		],
+		"name" : "picotoolBuild"
+	}
+}

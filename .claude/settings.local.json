@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git checkout *)",
+      "Bash(make bt2i2c *)",
+      "Bash(rm -rf *)",
+      "Bash(cmake ..)",
+      "Bash(make bt2uart *)",
+      "Bash(git add *)",
+      "Bash(git commit *)",
+      "Bash(git push *)",
+      "Bash(make *)",
+      "Bash(grep -E\"^[+-].*\\(connected|has_target|connection_in_progress|scanning|reconnect_pending|le_connection_handle|target_addr|last_disconnect_time|fn_pressed|hid_descriptor_available\\)\")",
+      "Bash(size *)",
+      "WebSearch",
+      "Bash(bash)"
+    ]
+  }
+}

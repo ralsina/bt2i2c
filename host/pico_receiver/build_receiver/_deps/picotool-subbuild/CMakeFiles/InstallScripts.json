@@ -1,0 +1,7 @@
+{
+	"InstallScripts" : 
+	[
+		"/home/ralsina/code/terminado/bt2i2c/host/pico_receiver/build_receiver/_deps/picotool-subbuild/cmake_install.cmake"
+	],
+	"Parallel" : false
+}

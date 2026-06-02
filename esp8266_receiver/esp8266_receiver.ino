@@ -1,219 +1,197 @@
 /*
- * ESP8266 Receiver for BT2UART Bridge
+ * ESP8266 I2C Receiver for BT2I2C Bridge
  *
- * Receives HID report frames from Pico W via UART and displays keystrokes.
+ * Polls key events from the Pico W BT2I2C bridge via I2C using the
+ * official BBQ10Keyboard library (i2c_puppet protocol).
  *
  * Hardware Connections:
- * - Pico W GP4 (TX) -> ESP8266 RX (4th pin from USB: 3v3, GND, TX, RX)
- * - Pico W GND -> ESP8266 GND (2nd pin from USB)
+ * - BBQ20 GP28 (SDA) -> ESP8266 GPIO12 (D6)
+ * - BBQ20 GP29 (SCL) -> ESP8266 GPIO14 (D5)
+ * - BBQ20 GND        -> ESP8266 GND
  *
- * UART Settings: 115200 baud, 8N1
- *
- * Protocol: [0xFE] [8-byte HID report]
- * - Byte 0: 0xFE sync marker
- * - Byte 1: Modifier keys (bitmask)
- * - Byte 2: Reserved (always 0)
- * - Bytes 3-8: Key codes (up to 6 simultaneous keys)
+ * Dependencies:
+ * - BBQ10Keyboard library: https://github.com/solderparty/arduino_bbq10kbd
+ *   Install via Arduino Library Manager: search "BBQ10Keyboard"
  */
 
 #include <Arduino.h>
+#include <Wire.h>
+#include <BBQ10Keyboard.h>
 
-// UART configuration - Use Serial1 for hardware UART on ESP8266
-#define BAUD_RATE 115200
-#define HID_REPORT_SIZE 8
-#define SYNC_BYTE 0xFE
+BBQ10Keyboard keyboard;
 
-// ESP8266 GPIO pins (use dedicated RX pin)
-#define UART_RX_PIN 3   // GPIO3 = RX pin (4th from USB: 3v3, GND, TX, RX)
-#define UART_TX_PIN 15  // GPIO15 = TX pin (not used, but required for Serial1)
-
-// Modifier key bitmasks
-#define MOD_LCTRL   0x01
-#define MOD_LSHIFT  0x02
-#define MOD_LALT    0x04
-#define MOD_LGUI    0x08
-#define MOD_RCTRL   0x10
-#define MOD_RSHIFT  0x20
-#define MOD_RALT    0x40
-#define MOD_RGUI    0x80
-
-// HID key codes to ASCII mapping (simplified - common keys only)
-const char* get_key_name(uint8_t key_code) {
-  static const char* key_names[] = {
-    "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z",
-    "1", "2", "3", "4", "5", "6", "7", "8", "9", "0",
-    "Enter", "Esc", "Backspace", "Tab", "Space",
-    "-", "=", "[", "]", "Pipe", ";", "'", "`",  // Pipe instead of backslash to avoid escaping issues
-    ",", ".", "/", "CapsLock",
-    "F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8", "F9", "F10", "F11", "F12",
-    "PrintScreen", "ScrollLock", "Pause", "Insert", "Home", "PageUp", "Delete", "End", "PageDown",
-    "Right", "Left", "Down", "Up"
-  };
-
-  if (key_code == 0) return "None";
-  if (key_code >= 0x04 && key_code <= 0x65) {
-    return key_names[key_code - 0x04];
-  }
-  return "Unknown";
-}
-
-// Convert HID key code to printable character (basic implementation)
-char hid_to_char(uint8_t key_code, uint8_t modifiers) {
-  bool shift = (modifiers & (MOD_LSHIFT | MOD_RSHIFT));
-
-  // Letters A-Z
-  if (key_code >= 0x04 && key_code <= 0x1D) {
-    return shift ? ('A' + key_code - 0x04) : ('a' + key_code - 0x04);
-  }
-
-  // Numbers 1-9, 0
-  if (key_code >= 0x1E && key_code <= 0x27) {
-    static const char shifted[] = "!@#$%^&*()";
-    static const char normal[] = "1234567890";
-    return shift ? shifted[key_code - 0x1E] : normal[key_code - 0x1E];
-  }
-
-  // Common symbols
-  switch (key_code) {
-    case 0x2C: return ' ';  // Space
-    case 0x2D: return shift ? '_' : '-';  // -/_
-    case 0x2E: return shift ? '+' : '=';  //= /+
-    case 0x2F: return shift ? '{' : '[';  // [ /{
-    case 0x30: return shift ? '}' : ']';  // ] /}
-    case 0x31: return shift ? '|' : '\\'; // \ /|
-    case 0x33: return shift ? ':' : ';';  // ; /:
-    case 0x34: return shift ? '"' : '\''; // '/"
-    case 0x35: return shift ? '~' : '`';  // `/~
-    case 0x36: return shift ? '<' : ',';  // ,/<
-    case 0x37: return shift ? '>' : '.';  // ./>
-    case 0x38: return shift ? '?' : '/';  // //?
-    case 0x28: return '\r'; // Enter
-    case 0x2A: return '\b'; // Backspace
-    case 0x2B: return '\t'; // Tab
-    case 0x29: return 0x1B; // Escape
-  }
-
-  return 0; // No printable character
-}
-
-void print_modifiers(uint8_t modifiers) {
-  if (modifiers == 0) return;
-
-  Serial.print(" [");
-  if (modifiers & MOD_LCTRL)  Serial.print("LCtrl+");
-  if (modifiers & MOD_RCTRL)  Serial.print("RCtrl+");
-  if (modifiers & MOD_LSHIFT) Serial.print("LShift+");
-  if (modifiers & MOD_RSHIFT) Serial.print("RShift+");
-  if (modifiers & MOD_LALT)   Serial.print("LAlt+");
-  if (modifiers & MOD_RALT)   Serial.print("RAlt+");
-  if (modifiers & MOD_LGUI)   Serial.print("LGui+");
-  if (modifiers & MOD_RGUI)   Serial.print("RGui+");
-
-  // Remove trailing +
-  Serial.print("\b] ");
-}
-
-uint8_t frame_buffer[9];  // [SYNC + 8-byte report]
-uint8_t buffer_pos = 0;
-uint8_t prev_report[8] = {0};
-
-void process_hid_report(const uint8_t *report) {
-  // Check if this is a new keypress (compare with previous)
-  bool is_new = false;
-  for (int i = 0; i < 8; i++) {
-    if (report[i] != prev_report[i]) {
-      is_new = true;
-      break;
+static char hid_to_char(uint8_t code)
+{
+    // Letters
+    if (code >= 0x04 && code <= 0x1D)
+        return 'a' + code - 0x04;
+    // Numbers
+    if (code >= 0x1E && code <= 0x27)
+        return "1234567890"[code - 0x1E];
+    // Common symbols and controls
+    switch (code) {
+        case 0x28: return '\n';
+        case 0x2A: return '\b';
+        case 0x2B: return '\t';
+        case 0x2C: return ' ';
+        case 0x2D: return '-';
+        case 0x2E: return '=';
+        case 0x2F: return '[';
+        case 0x30: return ']';
+        case 0x31: return '\\';
+        case 0x33: return ';';
+        case 0x34: return '\'';
+        case 0x35: return '`';
+        case 0x36: return ',';
+        case 0x37: return '.';
+        case 0x38: return '/';
+        default:   return 0;
     }
-  }
+}
 
-  if (!is_new) return; // Skip duplicate reports
+static const char* key_name(char key)
+{
+    switch ((uint8_t)key) {
+        case 0x00: return "None";
+        case 0x04 ... 0x1D: {
+            static const char letters[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+            static char buf[2] = {0, 0};
+            buf[0] = letters[key - 0x04];
+            return buf;
+        }
+        case 0x1E ... 0x27: {
+            static const char numbers[] = "1234567890";
+            static char buf[2] = {0, 0};
+            buf[0] = numbers[key - 0x1E];
+            return buf;
+        }
+        case 0x28: return "Enter";
+        case 0x29: return "Escape";
+        case 0x2A: return "Backspace";
+        case 0x2B: return "Tab";
+        case 0x2C: return "Space";
+        case 0x2D: return "-";
+        case 0x2E: return "=";
+        case 0x2F: return "[";
+        case 0x30: return "]";
+        case 0x31: return "\\";
+        case 0x33: return ";";
+        case 0x34: return "'";
+        case 0x35: return "`";
+        case 0x36: return ",";
+        case 0x37: return ".";
+        case 0x38: return "/";
+        case 0x39: return "CapsLock";
+        case 0x3A ... 0x45: {
+            static const char* fkeys[] = {
+                "F1","F2","F3","F4","F5","F6",
+                "F7","F8","F9","F10","F11","F12"
+            };
+            return fkeys[key - 0x3A];
+        }
+        case 0x4C: return "Delete";
+        case 0x9A: return "Alt";
+        case 0x9B: return "LShift";
+        case 0x9C: return "RShift";
+        case 0x9D: return "Sym";
+        default: return "Unknown";
+    }
+}
 
-  // Print raw HID report
-  Serial.print("RAW: ");
-  for (int i = 0; i < 8; i++) {
-    Serial.printf("%02X ", report[i]);
-  }
-  Serial.println();
+static void scan_i2c()
+{
+    Serial.println("Scanning I2C bus...");
+    for (uint8_t addr = 1; addr < 127; addr++) {
+        Wire.beginTransmission(addr);
+        uint8_t err = Wire.endTransmission();
+        if (err == 0) {
+            Serial.printf("  Found device at 0x%02X\n", addr);
+        }
+    }
+    Serial.println("Scan done.");
+}
 
-  // Print modifier keys
-  uint8_t modifiers = report[0];
-  if (modifiers != 0) {
-    Serial.print("Modifiers: ");
-    print_modifiers(modifiers);
+void setup()
+{
+    Serial.begin(115200);
+    while (!Serial && millis() < 3000);
+
     Serial.println();
-  }
+    Serial.println("=== ESP8266 BT2I2C Receiver ===");
+    Serial.println();
 
-  // Process key codes (bytes 2-7)
-  for (int i = 2; i < 8; i++) {
-    uint8_t key_code = report[i];
-    if (key_code != 0 && key_code != prev_report[i]) {
-      const char* key_name = get_key_name(key_code);
-      char printable = hid_to_char(key_code, modifiers);
+    Wire.begin(12, 14);  // SDA=GPIO12(D6), SCL=GPIO14(D5)
+    Wire.setClock(100000L);
 
-      Serial.printf("KEY %s: %s (0x%02X)",
-                   (report[i] != 0) ? "press" : "release",
-                   key_name, key_code);
+    scan_i2c();
 
-      if (printable != 0) {
-        Serial.printf(" -> '%c'", printable);
-      }
-      Serial.println();
+    Serial.println("Initializing keyboard...");
+    keyboard.begin();
+
+    Serial.println("Reading version register...");
+    uint8_t ver = keyboard.readRegister8(0x01);
+    Serial.printf("REG_VER = 0x%02X\n", ver);
+    if (ver == 0 || ver == 0xFF) {
+        Serial.println("WARNING: version looks wrong - trying raw I2C read...");
+        Wire.beginTransmission(0x1F);
+        Wire.write(0x01);
+        uint8_t err = Wire.endTransmission(false);
+        Serial.printf("  write err=%u\n", err);
+        uint8_t n = Wire.requestFrom((uint8_t)0x1F, (uint8_t)1);
+        Serial.printf("  requested %u bytes, got %u\n", 1, n);
+        if (n >= 1) {
+            uint8_t raw = Wire.read();
+            Serial.printf("  raw REG_VER = 0x%02X\n", raw);
+            ver = raw;
+        }
     }
-  }
+    if (ver != 0 && ver != 0xFF) {
+        Serial.printf("BT2I2C firmware v%d.%d detected\n", ver >> 4, ver & 0x0F);
+    } else {
+        Serial.println("ERROR: no response from keyboard at 0x1F");
+        Serial.println("Check wiring: BBQ20 GP28->ESP GPIO12, GP29->ESP GPIO14, GND->GND");
+    }
 
-  // Save current report for next comparison
-  memcpy(prev_report, report, 8);
+    Serial.println("Ready! Press keys on your BLE keyboard.");
+    Serial.println();
 }
 
-void setup() {
-  // Initialize debug serial (USB)
-  Serial.begin(115200);
-  while (!Serial && millis() < 3000); // Wait up to 3 seconds for serial
-
-  Serial.println("\n\n=== ESP8266 BT2UART Receiver ===");
-  Serial.println("Waiting for HID frames from Pico W...");
-  Serial.println("Press keys on your BLE keyboard!");
-  Serial.println();
-
-  // Initialize hardware UART1 for receiving from Pico W
-  // ESP8266 Serial1: RX=GPIO3 (RX pin), TX=GPIO15 (TX pin, not used)
-  Serial1.begin(BAUD_RATE);
-  Serial1.swap();  // Use alternate pins (RX=GPIO3, TX=GPIO15)
-
-  Serial.println("UART1 initialized on GPIO13 (RX)");
-  Serial.println("Ready!");
-  Serial.println();
-}
-
-void loop() {
-  // Read available bytes from UART
-  while (Serial1.available() > 0) {
-    uint8_t byte = Serial1.read();
-
-    // Look for sync byte
-    if (buffer_pos == 0 && byte != SYNC_BYTE) {
-      continue; // Keep looking for sync byte
+void loop()
+{
+    static unsigned long last_heartbeat = 0;
+    unsigned long now = millis();
+    if (now - last_heartbeat > 5000) {
+        last_heartbeat = now;
+        Serial.println("[alive]");
     }
 
-    // Add byte to buffer
-    frame_buffer[buffer_pos++] = byte;
-
-    // Check if we have a complete frame
-    if (buffer_pos >= 9) {
-      // Process the HID report (skip sync byte)
-      process_hid_report(frame_buffer + 1);
-      buffer_pos = 0; // Reset for next frame
+    int count = keyboard.keyCount();
+    if (count == 0) {
+        delay(5);
+        return;
     }
-  }
 
-  // Reset buffer if we haven't received a complete frame in 100ms
-  // This helps recover from sync errors
-  static unsigned long last_byte_time = 0;
-  if (buffer_pos > 0 && millis() - last_byte_time > 100) {
-    buffer_pos = 0;
-  }
-  if (Serial1.available() > 0) {
-    last_byte_time = millis();
-  }
+    for (int i = 0; i < count; i++) {
+        BBQ10Keyboard::KeyEvent ev = keyboard.keyEvent();
+        if (ev.state == BBQ10Keyboard::StateIdle)
+            break;
+
+        const char* sname;
+        switch (ev.state) {
+            case BBQ10Keyboard::StatePress:     sname = "PRESSED";  break;
+            case BBQ10Keyboard::StateLongPress: sname = "HOLD";     break;
+            case BBQ10Keyboard::StateRelease:   sname = "RELEASED"; break;
+            default:                            sname = "?";        break;
+        }
+
+        const char* name = key_name(ev.key);
+        char ch = hid_to_char((uint8_t)ev.key);
+        if (ch && ev.state == BBQ10Keyboard::StatePress) {
+            Serial.print(ch);
+        } else {
+            Serial.printf("KEY %s: %s (0x%02x)", sname, name, (uint8_t)ev.key);
+            if (ch) Serial.printf(" '%c'", ch);
+            Serial.println();
+        }
+    }
 }
