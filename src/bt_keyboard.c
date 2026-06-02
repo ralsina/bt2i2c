@@ -454,6 +454,7 @@ static void packet_handler(uint8_t packet_type, uint16_t channel,
 
                 gap_event_advertising_report_get_address(packet, event_addr);
                 printf("Found HID keyboard %s!\n", bd_addr_to_str(event_addr));
+                display_log("Found keyboard!");
                 gap_stop_scan();
                 scanning = false;
                 bd_addr_copy(target_addr, event_addr);
@@ -478,6 +479,7 @@ static void packet_handler(uint8_t packet_type, uint16_t channel,
                 if (status == ERROR_CODE_SUCCESS) {
                     le_connection_handle = hci_subevent_le_connection_complete_get_connection_handle(packet);
                     hci_subevent_le_connection_complete_get_peer_address(packet, event_addr);
+                    display_log("Connected to keyboard!");
                     printf("LE connected to %s, handle 0x%04x\n",
                         bd_addr_to_str(event_addr), le_connection_handle);
 
@@ -499,6 +501,7 @@ static void packet_handler(uint8_t packet_type, uint16_t channel,
         case HCI_EVENT_DISCONNECTION_COMPLETE:
             {
                 uint8_t reason = hci_event_disconnection_complete_get_reason(packet);
+                display_log("Disconnected!");
                 printf("Disconnected (reason: 0x%02x) - resetting and waiting before rescan\n", reason);
 
                 // Reset all connection state to simulate a fresh start
@@ -523,6 +526,7 @@ static void packet_handler(uint8_t packet_type, uint16_t channel,
 
                     // Try to get HID report descriptor - add debug info
                     printf("Attempting to get HID descriptor, hids_cid=%u\n", hids_cid);
+                    display_log("Getting HID descriptor");
 
                     const uint8_t *hid_descriptor = hids_client_descriptor_storage_get_descriptor_data(hids_cid, 0);
                     printf("Descriptor pointer: %p\n", (void*)hid_descriptor);
@@ -783,6 +787,7 @@ void bt_keyboard_start_pairing(void)
     // Start fresh scan for new keyboard
     printf("[PAIRING] Starting scan for new keyboard\n");
     printf("[PAIRING] Put your keyboard in pairing mode now!\n");
+    display_log("Pairing mode active");
     gap_set_scan_parameters(1, 0x100, 0x50);
     gap_start_scan();
     scanning = true;

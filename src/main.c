@@ -17,10 +17,19 @@ static bool bootsel_button_pressed = false;
 static void heartbeat_handler(btstack_timer_source_t *ts)
 {
     static int count = 0;
-    printf("[%d] alive - BLE: %s - FIFO: %d keys\n",
-           count++,
-           bt_keyboard_is_connected() ? "CONNECTED" : "SEARCHING",
+    char status_msg[64];
+
+    snprintf(status_msg, sizeof(status_msg),
+             "[%d] %s - FIFO: %d",
+             count++,
+             bt_keyboard_is_connected() ? "CONNECTED" : "SEARCHING");
+
+    printf("%s - BLE: %s - %d keys\n",
+           status_msg,
+           bt_keyboard_is_connected() ? "CONN" : "SEARCH",
            fifo_count());
+
+    display_log(status_msg);
 
     // Turn LED on only when keyboard is connected, off otherwise
     bool connected = bt_keyboard_is_connected();
@@ -54,6 +63,7 @@ static void check_pairing_button(btstack_timer_source_t *ts)
         // Debounce: check if button is still low
         if (!gpio_get(PIN_PAIRING_BUTTON)) {
             printf("\n🔘 PAIRING BUTTON PRESSED!\n");
+            display_log("PAIRING button pressed");
             bt_keyboard_start_pairing();
         }
     }
@@ -64,6 +74,7 @@ static void check_pairing_button(btstack_timer_source_t *ts)
         // Debounce: check if button is still low
         if (!gpio_get(PIN_BOOTSEL)) {
             printf("\n🔘 BOOTSSEL BUTTON PRESSED!\n");
+            display_log("BOOTSSEL button pressed");
             // For now, same functionality as pairing button
             // Can be changed later for different behavior
             bt_keyboard_start_pairing();
@@ -86,17 +97,20 @@ int main(void)
     printf("   BT2I2C Bridge - BLE to I2C Keyboard\n");
     printf("═══════════════════════════════════════════════════════\n");
 
+    // Initialize display first so we can show messages
+    display_init();
+    display_log("BT2I2C Bridge init...");
+
     // Init registers and I2C slave on GP4/SDA GP5/SCL
     reg_init();
     i2c_slave_init();
     const uint8_t i2c_addr = reg_get_value(REG_ID_ADR);
     printf("✅ I2C slave initialized: GP%d(SDA)/GP%d(SCL), addr=0x%02X\n",
            PIN_I2C_SDA, PIN_I2C_SCL, i2c_addr);
-
-    // Initialize display
-    display_init();
-    display_show_message("BT2I2C", "Initializing...");
-    printf("✅ Display initialized\n");
+    char i2c_msg[64];
+    snprintf(i2c_msg, sizeof(i2c_msg), "I2C: 0x%02X on GP%d/GP%d",
+             i2c_addr, PIN_I2C_SDA, PIN_I2C_SCL);
+    display_log(i2c_msg);
 
     // Initialize pairing button
     gpio_init(PIN_PAIRING_BUTTON);
@@ -107,6 +121,7 @@ int main(void)
                                        true,
                                        pairing_button_irq);
     printf("✅ Pairing button initialized (GP%d)\n", PIN_PAIRING_BUTTON);
+    display_log("Pairing button ready");
 
     // Initialize BOOTSSEL button (built-in button on Pico W)
     gpio_init(PIN_BOOTSEL);
@@ -117,16 +132,20 @@ int main(void)
                                        true,
                                        pairing_button_irq);
     printf("✅ BOOTSSEL button initialized (GP%d - built-in)\n", PIN_BOOTSEL);
+    display_log("BOOTSSEL button ready");
 
     if (cyw43_arch_init()) {
         printf("❌ cyw43_arch_init FAILED\n");
+        display_log("ERROR: WiFi/BLE failed");
         while (1) { tight_loop_contents(); }
     }
     printf("✅ WiFi/BLE chip initialized\n");
+    display_log("WiFi/BLE initialized");
 
     bt_keyboard_init();
     btstack_main(0, NULL);
     printf("✅ BLE stack initialized\n");
+    display_log("BLE stack ready");
 
     // Set up heartbeat timer (3 seconds)
     static btstack_timer_source_t button_timer;
@@ -150,6 +169,9 @@ int main(void)
     printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
     printf("🔘 Press button on GP%d or BOOTSSEL to force pairing\n", PIN_PAIRING_BUTTON);
     printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+
+    display_log("Searching for keyboard...");
+    display_log("Press button to pair");
 
     // Run the main event loop
     btstack_run_loop_execute();

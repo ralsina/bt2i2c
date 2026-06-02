@@ -21,7 +21,8 @@
 #define PIN_BOOTSEL 21
 
 // ST7789 Display pins (SPI)
-#define PIN_LCD_SCK   2   // GP2  (Pin 4)
+#define SPI_PORT      0   // Use SPI0 for display
+#define PIN_LCD_SCLK  2   // GP2  (Pin 4)
 #define PIN_LCD_MOSI  3   // GP3  (Pin 5)
 #define PIN_LCD_CS   -1   // No CS pin on this module
 #define PIN_LCD_DC    16  // GP16 (Pin 21) - FIXED!

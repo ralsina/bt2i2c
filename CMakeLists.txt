@@ -13,5 +13,8 @@ pico_sdk_init()
 # Define the project
 project(bt2i2c_ble C CXX ASM)
 
+# Add LovyanGFX library
+add_subdirectory(3rdparty/LovyanGFX)
+
 # Add subdirectory
 add_subdirectory(src)

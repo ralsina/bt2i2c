@@ -7,6 +7,7 @@
 #include <pico/stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 
 // Display dimensions
@@ -481,4 +482,50 @@ void display_show_message(const char *line1, const char *line2) {
 void display_update(void) {
     // Can be used for animations or periodic updates
     // For now, display is static between status changes
+}
+
+// Log buffer for scrolling display
+#define LOG_BUFFER_SIZE 10
+#define LOG_LINE_LENGTH 30
+static char *log_buffer[LOG_BUFFER_SIZE] = {0};
+static int log_index = 0;
+
+void display_log(const char *message) {
+    // Print to serial
+    printf("[LOG] %s\n", message);
+
+    // Add to log buffer (circular)
+    if (log_buffer[log_index]) {
+        free(log_buffer[log_index]);
+    }
+
+    // Allocate and copy message
+    log_buffer[log_index] = malloc(LOG_LINE_LENGTH + 1);
+    if (log_buffer[log_index]) {
+        strncpy(log_buffer[log_index], message, LOG_LINE_LENGTH);
+        log_buffer[log_index][LOG_LINE_LENGTH] = '\0';
+    }
+
+    log_index = (log_index + 1) % LOG_BUFFER_SIZE;
+
+    // Redraw log screen
+    display_clear();
+
+    // Title bar
+    lcd_set_window(0, 0, LCD_WIDTH - 1, 20);
+    lcd_fill_pixels(COLOR_BLUE, LCD_WIDTH * 20);
+
+    // Draw log lines
+    uint8_t black[2] = {0x00, 0x00};
+    uint8_t white[2] = {0xFF, 0xFF};
+
+    int y = 30;
+    for (int i = 0; i < LOG_BUFFER_SIZE; i++) {
+        int idx = (log_index - 1 - i + LOG_BUFFER_SIZE) % LOG_BUFFER_SIZE;
+        if (log_buffer[idx] && strlen(log_buffer[idx]) > 0) {
+            draw_text(log_buffer[idx], 10, y, black, white, 1);
+            y += 20;
+            if (y > LCD_HEIGHT - 20) break;
+        }
+    }
 }
