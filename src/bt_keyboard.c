@@ -446,11 +446,22 @@ static void packet_handler(uint8_t packet_type, uint16_t channel,
 
         case GAP_EVENT_ADVERTISING_REPORT:
             {
+                gap_event_advertising_report_get_address(packet, event_addr);
+                printf("[ADV] Device: %s, RSSI: %d\n",
+                       bd_addr_to_str(event_addr),
+                       gap_event_advertising_report_get_rssi(packet));
+
                 bool is_hid = ad_data_contains_uuid16(
                     gap_event_advertising_report_get_data_length(packet),
                     gap_event_advertising_report_get_data(packet),
                     ORG_BLUETOOTH_SERVICE_HUMAN_INTERFACE_DEVICE);
-                if (!is_hid) break;
+
+                printf("[ADV] Is HID: %s\n", is_hid ? "YES" : "NO");
+
+                if (!is_hid) {
+                    printf("[ADV] Skipping non-HID device\n");
+                    break;
+                }
 
                 gap_event_advertising_report_get_address(packet, event_addr);
                 printf("Found HID keyboard %s!\n", bd_addr_to_str(event_addr));
@@ -488,6 +499,8 @@ static void packet_handler(uint8_t packet_type, uint16_t channel,
                     // If it's a new device, we need to initiate pairing
                     // We'll wait to see if we get encryption events or pairing events
 
+                    printf("[CONNECT] Requesting encryption for new connection\n");
+                    sm_request_pairing(le_connection_handle);
                     set_sm_state(SM_STATE_PAIRING);
                 } else {
                     printf("LE connection failed: status 0x%02x\n", status);
