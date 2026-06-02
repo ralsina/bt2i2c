@@ -2,10 +2,6 @@
 
 #include <stdbool.h>
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 // Initialize the ST7789 display
 void display_init(void);
 
@@ -29,7 +25,3 @@ void display_update(void);
 
 // Log to both serial and display
 void display_log(const char *message);
-
-#ifdef __cplusplus
-}
-#endif
