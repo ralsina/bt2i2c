@@ -13,9 +13,9 @@ public:
     { // Bus control settings
       auto cfg = _bus_instance.config();
 
-      // SPI bus settings
+      // SPI bus settings - ST7789 needs SPI mode 3
       cfg.spi_host = SPI_PORT;   // SPI port (0 or 1)
-      cfg.spi_mode = 0;          // SPI mode (0 ~ 3)
+      cfg.spi_mode = 3;          // SPI mode 3 (CPOL=1, CPHA=1) for ST7789
       cfg.freq_write = 40000000;  // Transmit SPI clock (max 80MHz)
       cfg.freq_read  = 20000000;  // Receive SPI clock
 
@@ -46,13 +46,11 @@ public:
       _panel_instance.config(cfg);
     }
 
-    { // Backlight control settings
+    { // Backlight control settings - use simple GPIO for now
       auto cfg = _light_instance.config();
 
       cfg.pin_bl   = PIN_LCD_BL;   // Backlight pin
       cfg.invert   = false;         // Don't invert brightness
-      cfg.freq     = 44100;         // PWM frequency
-      cfg.pwm_channel = 6;         // PWM channel
 
       _light_instance.config(cfg);
       _panel_instance.setLight(&_light_instance);
