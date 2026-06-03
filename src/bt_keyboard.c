@@ -209,7 +209,9 @@ static const char* get_key_name_for_code(uint8_t code) {
     }
 }
 
-static void inject_key(char key, enum key_state state)
+static char hid_code_to_char(uint8_t code, uint8_t modifiers, bool capslock);
+
+static void inject_key(uint8_t code, uint8_t modifiers, enum key_state state)
 {
     const char *s;
     switch (state) {
@@ -219,20 +221,24 @@ static void inject_key(char key, enum key_state state)
         default:                 s = "IDLE";     break;
     }
 
-    const char* key_name = get_key_name_for_code((uint8_t)key);
+    const char* key_name = get_key_name_for_code(code);
     if (key_name) {
         printf("key: %s %s\n", key_name, s);
-    } else if (key >= 0x20 && key <= 0x7E) {
-        printf("key: '%c' (0x%02x) %s\n", key, (uint8_t)key, s);
     } else {
-        printf("key: 0x%02x %s\n", (uint8_t)key, s);
+        char ch = hid_code_to_char(code, modifiers, capslock);
+        if (ch >= 0x20 && ch <= 0x7E) {
+            printf("key: '%c' (0x%02x) %s\n", ch, code, s);
+        } else {
+            printf("key: 0x%02x %s\n", code, s);
+        }
+    }
 
     // Show key event on display
     // TEMPORARILY DISABLED TO DEBUG CRASH
     // if (state == KEY_STATE_PRESSED || state == KEY_STATE_RELEASED) {
-    //     display_show_key_event(key, state == KEY_STATE_PRESSED);
+    //     char ch = hid_code_to_char(code, modifiers, capslock);
+    //     display_show_key_event(ch ? ch : code, state == KEY_STATE_PRESSED);
     // }
-    }
 }
 
 static char hid_code_to_char(uint8_t code, uint8_t modifiers, bool capslock)
@@ -325,6 +331,12 @@ static void process_hid_report(const uint8_t *report_buf, uint16_t buf_len, uint
     // Use the modified report for FIFO enqueue and processing
     const uint8_t *final_report = fn_pressed ? modified_report : report;
 
+    printf("[HCI_REPORT] rid=%u mod=0x%02x keys=", report_id, modifiers);
+    for (int i = 2; i < HID_REPORT_SIZE; i++) {
+        if (final_report[i]) printf("0x%02x ", final_report[i]);
+    }
+    printf("\n");
+
     // Enqueue key events into I2C slave FIFO
     uint8_t mod_changes = modifiers ^ prev_mod;
     if (mod_changes & (HID_MOD_LCTRL | HID_MOD_RCTRL)) {
@@ -382,16 +394,7 @@ static void process_hid_report(const uint8_t *report_buf, uint16_t buf_len, uint
         if (code == 0 || code == HID_KEY_CAPSLOCK) continue;
         if (has_prev_report && find_in_prev(code)) continue;
 
-        // Handle special keys directly (Enter, Escape, Backspace, Tab, Space, Function keys, Navigation keys, etc.)
-        if ((code >= 0x28 && code <= 0x2c) || (code >= 0x3a && code <= 0x65)) {
-            inject_key(code, KEY_STATE_PRESSED);
-            continue;
-        }
-
-        uint8_t ch = hid_code_to_char(code, modifiers, capslock);
-        if (ch == 0) continue;
-
-        inject_key((char)ch, KEY_STATE_PRESSED);
+        inject_key(code, modifiers, KEY_STATE_PRESSED);
     }
 
     if (has_prev_report) {
@@ -400,16 +403,7 @@ static void process_hid_report(const uint8_t *report_buf, uint16_t buf_len, uint
             if (code == 0 || code == HID_KEY_CAPSLOCK) continue;
             if (find_in_report(report, code)) continue;
 
-            // Handle special keys directly (Enter, Escape, Backspace, Tab, Space, Function keys, Navigation keys, etc.)
-            if ((code >= 0x28 && code <= 0x2c) || (code >= 0x3a && code <= 0x65)) {
-                inject_key(code, KEY_STATE_RELEASED);
-                continue;
-            }
-
-            uint8_t ch = hid_code_to_char(code, prev_mod, capslock);
-            if (ch == 0) continue;
-
-            inject_key((char)ch, KEY_STATE_RELEASED);
+            inject_key(code, prev_mod, KEY_STATE_RELEASED);
         }
     }
 
