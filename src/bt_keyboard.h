@@ -20,5 +20,6 @@ void bt_keyboard_init(void);
 bool bt_keyboard_is_connected(void);
 bool bt_keyboard_reconnect_if_needed(void);
 void bt_keyboard_start_pairing(void);
+const char* bt_keyboard_get_device_name(void);
 
 int btstack_main(int argc, const char *argv[]);

@@ -131,6 +131,7 @@ static bd_addr_t identity_addr;  // Store the keyboard's identity address
 static bool has_identity_addr = false;
 static uint32_t last_hid_report_time = 0;
 static bool report_subscription_active = false;
+static char device_name[32] = "";
 
 // Connection state machine
 typedef enum {
@@ -150,10 +151,47 @@ static const char* sm_state_names[] = {
 
 static sm_state_t current_sm_state = SM_STATE_IDLE;
 
+static void parse_ad_data_for_name(const uint8_t *ad_data, uint16_t ad_len) {
+    uint16_t i = 0;
+    while (i + 1 < ad_len) {
+        uint8_t field_len = ad_data[i];
+        if (field_len == 0) break;
+        if (i + 1 + field_len > ad_len) break;
+        uint8_t field_type = ad_data[i + 1];
+        if (field_type == 0x09 || field_type == 0x08) {
+            uint8_t name_len = field_len - 1;
+            if (name_len > sizeof(device_name) - 1) name_len = sizeof(device_name) - 1;
+            memcpy(device_name, &ad_data[i + 2], name_len);
+            device_name[name_len] = '\0';
+            return;
+        }
+        i += field_len + 1;
+    }
+}
+
 static void set_sm_state(sm_state_t new_state) {
     if (current_sm_state == new_state) return;
     printf("[SM_STATE] %s -> %s\n", sm_state_names[current_sm_state], sm_state_names[new_state]);
     current_sm_state = new_state;
+
+    switch (new_state) {
+        case SM_STATE_SCANNING:
+            display_show_scanning();
+            break;
+        case SM_STATE_CONNECTING:
+        case SM_STATE_PAIRING:
+        case SM_STATE_HID_CONNECTING:
+            display_show_connecting(device_name[0] ? device_name : "Keyboard");
+            break;
+        case SM_STATE_CONNECTED:
+            display_show_connected(device_name[0] ? device_name : "Keyboard");
+            break;
+        case SM_STATE_IDLE:
+            display_show_disconnected();
+            break;
+        default:
+            break;
+    }
 }
 
 static btstack_packet_callback_registration_t hci_event_callback_registration;
@@ -456,6 +494,10 @@ static void packet_handler(uint8_t packet_type, uint16_t channel,
                     break;
                 }
 
+                parse_ad_data_for_name(
+                    gap_event_advertising_report_get_data(packet),
+                    gap_event_advertising_report_get_data_length(packet));
+
                 gap_event_advertising_report_get_address(packet, event_addr);
                 printf("Found HID keyboard %s!\n", bd_addr_to_str(event_addr));
                 display_log("Found keyboard!");
@@ -601,6 +643,7 @@ static void packet_handler(uint8_t packet_type, uint16_t channel,
                             if (status == ERROR_CODE_SUCCESS) {
                                 printf("HID service connected!\n");
                                 connected = true;
+                                set_sm_state(SM_STATE_CONNECTED);
                             } else {
                                 printf("HID service connect failed: 0x%02x\n", status);
                                 gap_disconnect(le_connection_handle);
@@ -660,6 +703,7 @@ static void packet_handler(uint8_t packet_type, uint16_t channel,
                 has_prev_report = false;
                 hids_cid = 0;
                 report_subscription_active = false;
+                set_sm_state(SM_STATE_IDLE);
             } else if (subevent == GATTSERVICE_SUBEVENT_HID_SERVICE_REPORTS_NOTIFICATION) {
                 printf("[GATTSERVICE_META] HID report notification enabled\n");
                 report_subscription_active = true;
@@ -843,37 +887,6 @@ void bt_keyboard_start_pairing(void)
     set_sm_state(SM_STATE_SCANNING);
 }
 
-// Display callbacks (weak symbols - can be overridden)
-__attribute__((weak)) void display_show_scanning(void) {}
-__attribute__((weak)) void display_show_connecting(const char *device_name) {}
-__attribute__((weak)) void display_show_connected(const char *device_name) {}
-__attribute__((weak)) void display_show_disconnected(void) {}
-__attribute__((weak)) void display_show_key_event(char key, bool pressed) {}
-
-// Modified state setter with display updates
-static void set_sm_state_with_display(sm_state_t new_state, const char *device_info) {
-    if (current_sm_state == new_state) return;
-    printf("[SM_STATE] %s -> %s\n", sm_state_names[current_sm_state], sm_state_names[new_state]);
-    current_sm_state = new_state;
-
-    // Update display based on new state
-    switch (new_state) {
-        case SM_STATE_SCANNING:
-            display_show_scanning();
-            break;
-        case SM_STATE_CONNECTING:
-        case SM_STATE_PAIRING:
-        case SM_STATE_HID_CONNECTING:
-            display_show_connecting(device_info ? device_info : "Keyboard");
-            break;
-        case SM_STATE_CONNECTED:
-            display_show_connected(device_info ? device_info : "Keyboard");
-            break;
-        case SM_STATE_IDLE:
-        case SM_STATE_RECONNECT_WAIT:
-            display_show_disconnected();
-            break;
-        default:
-            break;
-    }
+const char* bt_keyboard_get_device_name(void) {
+    return device_name;
 }

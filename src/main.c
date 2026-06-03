@@ -16,28 +16,19 @@ static bool pairing_button_pressed = false;
 static void heartbeat_handler(btstack_timer_source_t *ts)
 {
     static int count = 0;
-    char status_msg[64];
 
-    snprintf(status_msg, sizeof(status_msg),
-             "[%d] %s - FIFO: %d",
-             count++,
-             bt_keyboard_is_connected() ? "CONNECTED" : "SEARCHING");
-
-    printf("%s - BLE: %s - %d keys\n",
-           status_msg,
+    printf("[%d] %s - FIFO: %d - BLE: %s - %d keys\n",
+           count++,
+           bt_keyboard_is_connected() ? "CONNECTED" : "SEARCHING",
+           fifo_count(),
            bt_keyboard_is_connected() ? "CONN" : "SEARCH",
            fifo_count());
 
-    display_log(status_msg);
-
-    // Turn LED on only when keyboard is connected, off otherwise
     bool connected = bt_keyboard_is_connected();
     cyw43_arch_gpio_put(PICO_W_LED, connected ? 1 : 0);
 
-    // If we're in IDLE state (disconnected and waiting), restart scanning
     bt_keyboard_reconnect_if_needed();
 
-    // Heartbeat log to confirm firmware is alive
     printf("[HEARTBEAT] Firmware is alive - tick %d\n", count);
 
     btstack_run_loop_set_timer(&heartbeat, 3000);
@@ -84,22 +75,16 @@ int main(void)
     printf("   BT2I2C Bridge - BLE to I2C Keyboard\n");
     printf("═══════════════════════════════════════════════════════\n");
 
-    // Initialize display first so we can show messages
     display_init();
-    display_log("BT2I2C Bridge init...");
+    display_show_message("BT2I2C", "Initializing...");
+    printf("BT2I2C Bridge init...\n");
 
-    // Init registers and I2C slave on GP4/SDA GP5/SCL
     reg_init();
     i2c_slave_init();
     const uint8_t i2c_addr = reg_get_value(REG_ID_ADR);
-    printf("✅ I2C slave initialized: GP%d(SDA)/GP%d(SCL), addr=0x%02X\n",
+    printf("I2C slave initialized: GP%d(SDA)/GP%d(SCL), addr=0x%02X\n",
            PIN_I2C_SDA, PIN_I2C_SCL, i2c_addr);
-    char i2c_msg[64];
-    snprintf(i2c_msg, sizeof(i2c_msg), "I2C: 0x%02X on GP%d/GP%d",
-             i2c_addr, PIN_I2C_SDA, PIN_I2C_SCL);
-    display_log(i2c_msg);
 
-    // Initialize pairing button
     gpio_init(PIN_PAIRING_BUTTON);
     gpio_set_dir(PIN_PAIRING_BUTTON, GPIO_IN);
     gpio_pull_up(PIN_PAIRING_BUTTON);
@@ -107,21 +92,18 @@ int main(void)
                                        GPIO_IRQ_EDGE_FALL,
                                        true,
                                        pairing_button_irq);
-    printf("✅ Pairing button initialized (GP%d)\n", PIN_PAIRING_BUTTON);
-    display_log("Pairing button ready");
+    printf("Pairing button initialized (GP%d)\n", PIN_PAIRING_BUTTON);
 
     if (cyw43_arch_init()) {
-        printf("❌ cyw43_arch_init FAILED\n");
-        display_log("ERROR: WiFi/BLE failed");
+        printf("cyw43_arch_init FAILED\n");
+        display_show_message("ERROR", "WiFi/BLE failed");
         while (1) { tight_loop_contents(); }
     }
-    printf("✅ WiFi/BLE chip initialized\n");
-    display_log("WiFi/BLE initialized");
+    printf("WiFi/BLE chip initialized\n");
 
     bt_keyboard_init();
     btstack_main(0, NULL);
-    printf("✅ BLE stack initialized\n");
-    display_log("BLE stack ready");
+    printf("BLE stack initialized\n");
 
     // Set up heartbeat timer (3 seconds)
     heartbeat.process = &heartbeat_handler;
@@ -137,16 +119,10 @@ int main(void)
     // Make sure LED starts off
     cyw43_arch_gpio_put(PICO_W_LED, 0);
 
-    printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
-    printf("   Searching for BLE keyboard...\n");
-    printf("   Put your keyboard in pairing mode\n");
-    printf("   LED will light when connected\n");
-    printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
-    printf("🔘 Press button on GP%d to force pairing\n", PIN_PAIRING_BUTTON);
-    printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
-
-    display_log("Searching for keyboard...");
-    display_log("Press button to pair");
+    printf("Searching for BLE keyboard...\n");
+    printf("Put your keyboard in pairing mode\n");
+    printf("LED will light when connected\n");
+    printf("Press button on GP%d to force pairing\n", PIN_PAIRING_BUTTON);
 
     // Run the main event loop
     btstack_run_loop_execute();
