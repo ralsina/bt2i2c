@@ -129,6 +129,8 @@ static bool fn_pressed = false;
 static bool hid_descriptor_available = false;
 static bd_addr_t identity_addr;  // Store the keyboard's identity address
 static bool has_identity_addr = false;
+static uint32_t last_hid_report_time = 0;
+static bool report_subscription_active = false;
 
 // Connection state machine
 typedef enum {
@@ -226,9 +228,10 @@ static void inject_key(char key, enum key_state state)
         printf("key: 0x%02x %s\n", (uint8_t)key, s);
 
     // Show key event on display
-    if (state == KEY_STATE_PRESSED || state == KEY_STATE_RELEASED) {
-        display_show_key_event(key, state == KEY_STATE_PRESSED);
-    }
+    // TEMPORARILY DISABLED TO DEBUG CRASH
+    // if (state == KEY_STATE_PRESSED || state == KEY_STATE_RELEASED) {
+    //     display_show_key_event(key, state == KEY_STATE_PRESSED);
+    // }
     }
 }
 
@@ -259,7 +262,9 @@ static void process_hid_report(const uint8_t *report_buf, uint16_t buf_len, uint
     const uint8_t *report = report_buf + offset;
     uint16_t len = buf_len - offset;
 
-    if (len < HID_REPORT_SIZE) return;
+    if (len < HID_REPORT_SIZE) {
+        return;
+    }
 
     uint8_t modifiers = report[0];
     uint8_t prev_mod = has_prev_report ? prev_report[0] : 0;
@@ -319,12 +324,6 @@ static void process_hid_report(const uint8_t *report_buf, uint16_t buf_len, uint
 
     // Use the modified report for FIFO enqueue and processing
     const uint8_t *final_report = fn_pressed ? modified_report : report;
-
-    printf("report: rid=%u mod=0x%02x keys=", report_id, modifiers);
-    for (int i = 2; i < HID_REPORT_SIZE && i < len; i++) {
-        if (final_report[i]) printf("0x%02x ", final_report[i]);
-    }
-    printf("\n");
 
     // Enqueue key events into I2C slave FIFO
     uint8_t mod_changes = modifiers ^ prev_mod;
@@ -484,44 +483,63 @@ static void packet_handler(uint8_t packet_type, uint16_t channel,
             break;
 
         case HCI_EVENT_LE_META:
-            if (hci_event_le_meta_get_subevent_code(packet) ==
-                HCI_SUBEVENT_LE_CONNECTION_COMPLETE) {
-                uint8_t status = hci_subevent_le_connection_complete_get_status(packet);
-                if (status == ERROR_CODE_SUCCESS) {
-                    le_connection_handle = hci_subevent_le_connection_complete_get_connection_handle(packet);
-                    hci_subevent_le_connection_complete_get_peer_address(packet, event_addr);
-                    display_log("Connected to keyboard!");
-                    printf("LE connected to %s, handle 0x%04x\n",
-                        bd_addr_to_str(event_addr), le_connection_handle);
+            {
+                uint8_t subevent = hci_event_le_meta_get_subevent_code(packet);
+                printf("[LE_META] Subevent: 0x%02x\n", subevent);
 
-                    // Check if this device was already paired/encrypted
-                    // If it's a reconnection, encryption will start automatically
-                    // If it's a new device, we need to initiate pairing
-                    // We'll wait to see if we get encryption events or pairing events
+                if (subevent == HCI_SUBEVENT_LE_CONNECTION_COMPLETE) {
+                    uint8_t status = hci_subevent_le_connection_complete_get_status(packet);
+                    if (status == ERROR_CODE_SUCCESS) {
+                        le_connection_handle = hci_subevent_le_connection_complete_get_connection_handle(packet);
+                        hci_subevent_le_connection_complete_get_peer_address(packet, event_addr);
+                        display_log("Connected to keyboard!");
+                        printf("LE connected to %s, handle 0x%04x\n",
+                            bd_addr_to_str(event_addr), le_connection_handle);
 
-                    printf("[CONNECT] Requesting encryption for new connection\n");
-                    sm_request_pairing(le_connection_handle);
-                    set_sm_state(SM_STATE_PAIRING);
-                } else {
-                    printf("LE connection failed: status 0x%02x\n", status);
-                    scanning = true;
-                    gap_start_scan();
-                    set_sm_state(SM_STATE_SCANNING);
+                        // Check if this device was already paired/encrypted
+                        // If it's a reconnection, encryption will start automatically
+                        // If it's a new device, we need to initiate pairing
+                        // We'll wait to see if we get encryption events or pairing events
+
+                        printf("[CONNECT] Requesting encryption for new connection\n");
+                        sm_request_pairing(le_connection_handle);
+                        set_sm_state(SM_STATE_PAIRING);
+                    } else {
+                        printf("LE connection failed: status 0x%02x\n", status);
+                        scanning = true;
+                        gap_start_scan();
+                        set_sm_state(SM_STATE_SCANNING);
+                    }
+                } else if (subevent == HCI_SUBEVENT_LE_CONNECTION_UPDATE_COMPLETE) {
+                    printf("[LE_CONN_UPDATE] Connection parameters updated\n");
+                    printf("[LE_CONN_UPDATE] Packet length: %d\n", size);
+                    uint8_t status = hci_subevent_le_connection_update_complete_get_status(packet);
+                    uint16_t conn_interval = hci_subevent_le_connection_update_complete_get_conn_interval(packet);
+                    uint16_t conn_latency = hci_subevent_le_connection_update_complete_get_conn_latency(packet);
+                    uint16_t supervision_timeout = hci_subevent_le_connection_update_complete_get_supervision_timeout(packet);
+                    printf("[LE_CONN_UPDATE] Status: 0x%02x, Interval: %u, Latency: %u, Timeout: %u\n",
+                           status, conn_interval, conn_latency, supervision_timeout);
+                    printf("[LE_CONN_UPDATE] Extracted parameters successfully\n");
+                    printf("[LE_CONN_UPDATE] Handler complete, returning\n");
+                    // DO NOT retry - the keyboard rejects parameter changes and it breaks HID
                 }
             }
             break;
 
         case HCI_EVENT_DISCONNECTION_COMPLETE:
             {
+                uint16_t handle = hci_event_disconnection_complete_get_connection_handle(packet);
                 uint8_t reason = hci_event_disconnection_complete_get_reason(packet);
                 display_log("Disconnected!");
-                printf("Disconnected (reason: 0x%02x) - resetting and waiting before rescan\n", reason);
+                printf("Disconnected handle 0x%04x (reason: 0x%02x) - resetting and waiting before rescan\n",
+                       handle, reason);
 
                 // Reset all connection state to simulate a fresh start
                 connected = false;
                 has_prev_report = false;
                 has_target = false;
                 has_identity_addr = false;
+                hids_cid = 0;
                 le_connection_handle = HCI_CON_HANDLE_INVALID;
 
                 set_sm_state(SM_STATE_IDLE);
@@ -566,18 +584,14 @@ static void packet_handler(uint8_t packet_type, uint16_t channel,
                     }
 
                     connected = true;
+                    report_subscription_active = true;
+                    last_hid_report_time = to_ms_since_boot(get_absolute_time());
                     set_sm_state(SM_STATE_CONNECTED);
                 } else {
                     printf("HID service connect failed: 0x%02x\n", hid_status);
                     gap_disconnect(le_connection_handle);
                 }
             }
-            break;
-
-        case GATTSERVICE_SUBEVENT_HID_SERVICE_DISCONNECTED:
-            printf("HID service disconnected\n");
-            connected = false;
-            has_prev_report = false;
             break;
 
         default:
@@ -613,6 +627,18 @@ static void packet_handler(uint8_t packet_type, uint16_t channel,
                         }
                     } else {
                         printf("HCI_EVENT 0x%02x\n", evt);
+
+                        // Special debugging for 0x0f (NUMBER_OF_COMPLETED_PACKETS)
+                        if (evt == 0x0f) {
+                            printf("[DEBUG] Connection handle: 0x%04x, Connected: %d, hids_cid: %d\n",
+                                   le_connection_handle, connected, hids_cid);
+                            printf("[DEBUG] Scanning: %d, Target found: %d\n", scanning, has_target);
+                        }
+
+                        // HCI_EVENT 0x7e is VENDOR_SPECIFIC - often breaks HID
+                        if (evt == 0x7e) {
+                            printf("[WARNING] Vendor-specific HCI event - this may break HID!\n");
+                        }
                     }
                 }
             }
@@ -627,9 +653,24 @@ static void packet_handler(uint8_t packet_type, uint16_t channel,
                 const uint8_t *report = gattservice_subevent_hid_report_get_report(packet);
                 uint16_t report_len = gattservice_subevent_hid_report_get_report_len(packet);
                 uint8_t report_id = gattservice_subevent_hid_report_get_report_id(packet);
+
+                // Track last report time for debugging
+                last_hid_report_time = to_ms_since_boot(get_absolute_time());
+
                 if (connected) {
                     process_hid_report(report, report_len, report_id);
                 }
+            } else if (subevent == GATTSERVICE_SUBEVENT_HID_SERVICE_DISCONNECTED) {
+                printf("[GATTSERVICE_META] HID service disconnected\n");
+                connected = false;
+                has_prev_report = false;
+                hids_cid = 0;
+                report_subscription_active = false;
+            } else if (subevent == GATTSERVICE_SUBEVENT_HID_SERVICE_REPORTS_NOTIFICATION) {
+                printf("[GATTSERVICE_META] HID report notification enabled\n");
+                report_subscription_active = true;
+            } else {
+                printf("[GATTSERVICE_META] Unknown subevent: 0x%02x\n", subevent);
             }
         }
         break;
@@ -762,6 +803,7 @@ bool bt_keyboard_reconnect_if_needed(void)
         set_sm_state(SM_STATE_SCANNING);
         return true;
     }
+
     return false;
 }
 

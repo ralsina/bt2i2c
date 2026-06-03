@@ -37,6 +37,9 @@ static void heartbeat_handler(btstack_timer_source_t *ts)
     // If we're in IDLE state (disconnected and waiting), restart scanning
     bt_keyboard_reconnect_if_needed();
 
+    // Heartbeat log to confirm firmware is alive
+    printf("[HEARTBEAT] Firmware is alive - tick %d\n", count);
+
     btstack_run_loop_set_timer(&heartbeat, 3000);
     btstack_run_loop_add_timer(&heartbeat);
 }
@@ -121,10 +124,9 @@ int main(void)
     display_log("BLE stack ready");
 
     // Set up heartbeat timer (3 seconds)
-    static btstack_timer_source_t button_timer;
-    button_timer.process = &heartbeat_handler;
-    btstack_run_loop_set_timer(&button_timer, 3000);
-    btstack_run_loop_add_timer(&button_timer);
+    heartbeat.process = &heartbeat_handler;
+    btstack_run_loop_set_timer(&heartbeat, 3000);
+    btstack_run_loop_add_timer(&heartbeat);
 
     // Set up button check timer (100ms)
     static btstack_timer_source_t pairing_timer;
