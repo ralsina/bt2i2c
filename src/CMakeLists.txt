@@ -1,6 +1,7 @@
 add_executable(bt2i2c_ble
     main.c
     bt_keyboard.c
+    bt_classic.c
     display.c
     reg.c
     i2c_slave.c
@@ -21,6 +22,7 @@ target_link_libraries(bt2i2c_ble
     pico_cyw43_arch_none
     pico_btstack_cyw43
     pico_btstack_ble
+    pico_btstack_classic
     hardware_i2c
     hardware_spi
     hardware_gpio

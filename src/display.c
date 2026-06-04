@@ -72,6 +72,7 @@ static uint16_t frame_buffer[LCD_WIDTH * LCD_HEIGHT];
 #define COLOR_CYAN    0x07FF
 #define COLOR_MAGENTA 0xF81F
 #define COLOR_LIGHTBLUE 0x3DFF
+#define COLOR_ORANGE    0xFD20
 
 static inline void cs_select(void) {
     if (PIN_LCD_CS >= 0) {
@@ -420,8 +421,13 @@ static void draw_status_screen(const char *title, const char *detail1, const cha
 }
 
 void display_show_scanning(void) {
-    draw_status_screen("SCANNING", "Searching for", "keyboard...", "Press btn to pair", COLOR_CYAN);
-    printf("[DISPLAY] Showing: SCANNING\n");
+    draw_status_screen("SCANNING", "BLE scan...", "Press btn to pair", NULL, COLOR_CYAN);
+    printf("[DISPLAY] Showing: SCANNING BLE\n");
+}
+
+void display_show_inquiry(void) {
+    draw_status_screen("INQUIRY", "BT classic scan...", "Press btn to pair", NULL, COLOR_ORANGE);
+    printf("[DISPLAY] Showing: INQUIRY\n");
 }
 
 void display_show_connecting(const char *device_name) {

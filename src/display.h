@@ -7,6 +7,7 @@ void display_init(void);
 
 // Update connection status display
 void display_show_scanning(void);
+void display_show_inquiry(void);
 void display_show_connecting(const char *device_name);
 void display_show_connected(const char *device_name);
 void display_show_disconnected(void);

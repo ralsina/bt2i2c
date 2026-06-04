@@ -1,5 +1,6 @@
 #include "display.h"
 #include "bt_keyboard.h"
+#include "bt_classic.h"
 
 #include <btstack.h>
 #include <btstack_hid_parser.h>
@@ -136,17 +137,19 @@ static char device_name[32] = "";
 // Connection state machine
 typedef enum {
     SM_STATE_IDLE = 0,
-    SM_STATE_SCANNING,
+    SM_STATE_SCANNING_BLE,
+    SM_STATE_SCANNING_CLASSIC,
     SM_STATE_CONNECTING,
     SM_STATE_PAIRING,
     SM_STATE_HID_CONNECTING,
+    SM_STATE_CLASSIC_CONNECTING,
     SM_STATE_CONNECTED,
     SM_STATE_DISCONNECTING,
-    SM_STATE_RECONNECT_WAIT
 } sm_state_t;
 
 static const char* sm_state_names[] = {
-    "IDLE", "SCANNING", "CONNECTING", "PAIRING", "HID_CONNECTING", "CONNECTED", "DISCONNECTING", "RECONNECT_WAIT"
+    "IDLE", "SCANNING_BLE", "SCANNING_CLASSIC", "CONNECTING", "PAIRING",
+    "HID_CONNECTING", "CLASSIC_CONNECTING", "CONNECTED", "DISCONNECTING"
 };
 
 static sm_state_t current_sm_state = SM_STATE_IDLE;
@@ -175,12 +178,16 @@ static void set_sm_state(sm_state_t new_state) {
     current_sm_state = new_state;
 
     switch (new_state) {
-        case SM_STATE_SCANNING:
+        case SM_STATE_SCANNING_BLE:
             display_show_scanning();
+            break;
+        case SM_STATE_SCANNING_CLASSIC:
+            display_show_inquiry();
             break;
         case SM_STATE_CONNECTING:
         case SM_STATE_PAIRING:
         case SM_STATE_HID_CONNECTING:
+        case SM_STATE_CLASSIC_CONNECTING:
             display_show_connecting(device_name[0] ? device_name : "Keyboard");
             break;
         case SM_STATE_CONNECTED:
@@ -194,8 +201,264 @@ static void set_sm_state(sm_state_t new_state) {
     }
 }
 
+static bool classic_target_found = false;
+static bd_addr_t classic_target_addr;
+
 static btstack_packet_callback_registration_t hci_event_callback_registration;
 static btstack_packet_callback_registration_t sm_event_callback_registration;
+
+// Classic pairing - deferred PIN response timer to avoid reentrancy issues
+static btstack_timer_source_t classic_pin_timer;
+static bd_addr_t classic_pin_addr;
+static btstack_timer_source_t classic_retry_timer;
+static bd_addr_t classic_retry_addr;
+static bool classic_retry_addr_valid = false;
+static bool classic_retry_pending = false;
+
+static const char *classic_pin_candidates[] = {"DYNAMIC"};
+#define CLASSIC_PIN_CANDIDATE_COUNT ((uint8_t)(sizeof(classic_pin_candidates) / sizeof(classic_pin_candidates[0])))
+static uint8_t classic_pin_candidate_index = 0;
+static char classic_dynamic_pin[7] = "000000";
+static uint8_t classic_dynamic_attempts = 0;
+#define CLASSIC_DYNAMIC_MAX_ATTEMPTS 5
+
+static btstack_timer_source_t classic_connect_timer;
+#define CLASSIC_CONNECT_TIMEOUT_MS 60000
+// Maximum time to wait for a pairing flow before trying the next PIN candidate.
+#define CLASSIC_PAIRING_GRACE_MS 30000
+static bool classic_pairing_in_progress = false;
+static uint32_t classic_pairing_started_ms = 0;
+
+#define CLASSIC_DYNAMIC_PIN_INDEX 0
+
+static const char *classic_get_active_pin(void) {
+    if (classic_pin_candidate_index == CLASSIC_DYNAMIC_PIN_INDEX) {
+        return classic_dynamic_pin;
+    }
+    return classic_pin_candidates[classic_pin_candidate_index];
+}
+
+static void classic_generate_dynamic_pin(void) {
+    // Simple runtime-derived PIN: enough to vary attempts and support keyboards
+    // that expect the user to type host-provided digits.
+    uint32_t now_ms = to_ms_since_boot(get_absolute_time());
+    uint32_t pin_value = (now_ms / 37u) % 1000000u;
+    snprintf(classic_dynamic_pin, sizeof(classic_dynamic_pin), "%06lu", (unsigned long)pin_value);
+}
+
+static void classic_mark_pairing_started(void) {
+    classic_pairing_in_progress = true;
+    classic_pairing_started_ms = to_ms_since_boot(get_absolute_time());
+}
+
+static void classic_reset_pairing_state(void) {
+    classic_pairing_in_progress = false;
+    classic_pairing_started_ms = 0;
+}
+
+static void classic_retry_timer_handler(btstack_timer_source_t *ts) {
+    UNUSED(ts);
+    if (!classic_retry_addr_valid) {
+        classic_retry_pending = false;
+        return;
+    }
+    classic_retry_pending = false;
+    if (classic_pin_candidate_index == CLASSIC_DYNAMIC_PIN_INDEX) {
+        classic_generate_dynamic_pin();
+        printf("[CLASSIC] New dynamic PIN: %s (type on keyboard, then press Enter)\n", classic_dynamic_pin);
+        display_log("Type PIN on keyboard");
+    }
+    printf("[CLASSIC] Reconnecting to %s with PIN '%s'\n",
+           bd_addr_to_str(classic_retry_addr), classic_get_active_pin());
+    bt_classic_connect(classic_retry_addr);
+}
+
+static bool classic_try_next_pin(const char *reason) {
+    if (classic_retry_pending) {
+        printf("[CLASSIC] %s, retry already pending with PIN '%s'\n", reason, classic_get_active_pin());
+        return true;
+    }
+    if (!classic_retry_addr_valid) {
+        return false;
+    }
+    if (classic_pin_candidate_index == CLASSIC_DYNAMIC_PIN_INDEX) {
+        if (classic_dynamic_attempts < CLASSIC_DYNAMIC_MAX_ATTEMPTS) {
+            classic_dynamic_attempts++;
+            classic_generate_dynamic_pin();
+            printf("[CLASSIC] %s, retrying with new dynamic PIN '%s' (attempt %u/%u)\n",
+                   reason,
+                   classic_get_active_pin(),
+                   classic_dynamic_attempts,
+                   CLASSIC_DYNAMIC_MAX_ATTEMPTS);
+        } else {
+            printf("[CLASSIC] %s and dynamic PIN retries exhausted\n", reason);
+            return false;
+        }
+    } else {
+        if (classic_pin_candidate_index + 1 >= CLASSIC_PIN_CANDIDATE_COUNT) {
+            printf("[CLASSIC] %s and no more PIN candidates\n", reason);
+            return false;
+        }
+
+        classic_pin_candidate_index++;
+        printf("[CLASSIC] %s, switching to PIN '%s'\n", reason, classic_get_active_pin());
+    }
+    classic_reset_pairing_state();
+    btstack_run_loop_remove_timer(&classic_connect_timer);
+    classic_retry_pending = true;
+    bt_classic_disconnect();
+
+    classic_retry_timer.process = &classic_retry_timer_handler;
+    btstack_run_loop_remove_timer(&classic_retry_timer);
+    btstack_run_loop_set_timer(&classic_retry_timer, 500);
+    btstack_run_loop_add_timer(&classic_retry_timer);
+    return true;
+}
+
+static void classic_prepare_retry_target(const bd_addr_t addr) {
+    if (!classic_retry_addr_valid || memcmp(classic_retry_addr, addr, 6) != 0) {
+        classic_pin_candidate_index = 0;
+        classic_dynamic_attempts = 1;
+        classic_generate_dynamic_pin();
+        bd_addr_copy(classic_retry_addr, addr);
+        classic_retry_addr_valid = true;
+        classic_retry_pending = false;
+        printf("[CLASSIC] New target %s, reset PIN strategy to '%s'\n",
+               bd_addr_to_str(classic_retry_addr), classic_get_active_pin());
+        printf("[CLASSIC] Dynamic PIN for first attempt: %s (type on keyboard, then press Enter)\n",
+               classic_dynamic_pin);
+    }
+}
+
+static void classic_connect_timer_handler(btstack_timer_source_t *ts) {
+    UNUSED(ts);
+    if (current_sm_state != SM_STATE_CLASSIC_CONNECTING) {
+        return;
+    }
+
+    if (classic_pairing_in_progress) {
+        uint32_t now_ms = to_ms_since_boot(get_absolute_time());
+        if (classic_pairing_started_ms != 0 &&
+            (now_ms - classic_pairing_started_ms) >= CLASSIC_PAIRING_GRACE_MS) {
+            if (classic_try_next_pin("Pairing timeout")) {
+                return;
+            }
+
+            printf("[CLASSIC] Pairing timeout with all PINs exhausted, restarting discovery\n");
+            bt_classic_disconnect();
+            bt_keyboard_notify_classic_disconnected();
+            bt_keyboard_reconnect_if_needed();
+            return;
+        }
+
+        printf("[CLASSIC] Connect watchdog: pairing still in progress, extending timeout\n");
+        btstack_run_loop_set_timer(&classic_connect_timer, CLASSIC_CONNECT_TIMEOUT_MS);
+        btstack_run_loop_add_timer(&classic_connect_timer);
+        return;
+    }
+
+    printf("[CLASSIC] Connect timeout - restarting discovery\n");
+    bt_classic_disconnect();
+    bt_keyboard_notify_classic_disconnected();
+    bt_keyboard_reconnect_if_needed();
+}
+
+static void classic_pin_timer_handler(btstack_timer_source_t *ts) {
+    UNUSED(ts);
+    printf("[CLASSIC] Deferred PIN response for %s with '%s'\n",
+           bd_addr_to_str(classic_pin_addr), classic_get_active_pin());
+    gap_pin_code_response(classic_pin_addr, classic_get_active_pin());
+}
+
+static btstack_timer_source_t scan_switch_timer;
+#define SCAN_PHASE_BLE_MS 5000
+
+static void scan_switch_handler(btstack_timer_source_t *ts) {
+    UNUSED(ts);
+    if (current_sm_state == SM_STATE_SCANNING_BLE) {
+        printf("[SCAN] Switching BLE -> Classic inquiry\n");
+        gap_stop_scan();
+        scanning = false;
+        bt_classic_start_inquiry();
+        set_sm_state(SM_STATE_SCANNING_CLASSIC);
+        btstack_run_loop_set_timer(&scan_switch_timer, SCAN_PHASE_BLE_MS);
+        btstack_run_loop_add_timer(&scan_switch_timer);
+    }
+}
+
+static void start_ble_scan(void) {
+    device_name[0] = '\0';
+    gap_set_scan_parameters(1, 0x100, 0x50);
+    gap_start_scan();
+    scanning = true;
+    set_sm_state(SM_STATE_SCANNING_BLE);
+    scan_switch_timer.process = &scan_switch_handler;
+    btstack_run_loop_set_timer(&scan_switch_timer, SCAN_PHASE_BLE_MS);
+    btstack_run_loop_add_timer(&scan_switch_timer);
+}
+
+static void stop_ble_scan(void) {
+    if (scanning) {
+        gap_stop_scan();
+        scanning = false;
+    }
+    btstack_run_loop_remove_timer(&scan_switch_timer);
+}
+
+void bt_keyboard_notify_classic_connected(const char *name) {
+    btstack_run_loop_remove_timer(&classic_connect_timer);
+    btstack_run_loop_remove_timer(&classic_retry_timer);
+    classic_retry_pending = false;
+    classic_reset_pairing_state();
+    if (name && name[0]) {
+        strncpy(device_name, name, sizeof(device_name) - 1);
+        device_name[sizeof(device_name) - 1] = '\0';
+    }
+    connected = true;
+    has_prev_report = false;
+    last_hid_report_time = to_ms_since_boot(get_absolute_time());
+    set_sm_state(SM_STATE_CONNECTED);
+}
+
+void bt_keyboard_notify_classic_connecting(const char *name) {
+    if (name && name[0]) {
+        strncpy(device_name, name, sizeof(device_name) - 1);
+        device_name[sizeof(device_name) - 1] = '\0';
+    }
+
+    classic_reset_pairing_state();
+    classic_connect_timer.process = &classic_connect_timer_handler;
+    btstack_run_loop_remove_timer(&classic_connect_timer);
+    btstack_run_loop_set_timer(&classic_connect_timer, CLASSIC_CONNECT_TIMEOUT_MS);
+    btstack_run_loop_add_timer(&classic_connect_timer);
+
+    set_sm_state(SM_STATE_CLASSIC_CONNECTING);
+}
+
+void bt_keyboard_notify_classic_disconnected(void) {
+    btstack_run_loop_remove_timer(&classic_connect_timer);
+    if (!classic_retry_pending) {
+        btstack_run_loop_remove_timer(&classic_retry_timer);
+    }
+    classic_reset_pairing_state();
+    connected = false;
+    has_prev_report = false;
+    set_sm_state(SM_STATE_IDLE);
+}
+
+static void process_hid_report(const uint8_t *report_buf, uint16_t buf_len, uint8_t report_id);
+
+void bt_keyboard_classic_report(const uint8_t *report, uint16_t len) {
+    if (connected) {
+        uint8_t report_id = 0;
+        // Many Classic keyboards prepend report_id before the 8-byte keyboard payload.
+        // If present, let process_hid_report strip it via report_id/offset logic.
+        if (len > HID_REPORT_SIZE && report[0] != 0) {
+            report_id = report[0];
+        }
+        process_hid_report(report, len, report_id);
+    }
+}
 
 static uint8_t find_in_prev(uint8_t code)
 {
@@ -462,17 +725,192 @@ static void packet_handler(uint8_t packet_type, uint16_t channel,
                 uint8_t s = btstack_event_state_get_state(packet);
                 printf("BTSTACK_EVENT_STATE %d\n", s);
                 if (s == HCI_STATE_WORKING) {
-                    printf("BT stack ready, scanning...\n");
-                    gap_set_scan_parameters(1, 0x100, 0x50);
-                    gap_start_scan();
-                    scanning = true;
-                    set_sm_state(SM_STATE_SCANNING);
+                    printf("BT stack ready, dual-mode scan...\n");
+                    start_ble_scan();
                 }
             }
             break;
 
         case BTSTACK_EVENT_POWERON_FAILED:
             printf("BTSTACK_EVENT_POWERON_FAILED\n");
+            break;
+
+        case GAP_EVENT_INQUIRY_RESULT:
+            {
+                gap_event_inquiry_result_get_bd_addr(packet, event_addr);
+                uint32_t cod = gap_event_inquiry_result_get_class_of_device(packet);
+                uint8_t rssi = gap_event_inquiry_result_get_rssi(packet);
+                uint8_t major_class = (cod >> 8) & 0x1F;
+
+                printf("[INQUIRY] Device: %s CoD=0x%06lx RSSI=%d major=%u\n",
+                       bd_addr_to_str(event_addr), (unsigned long)cod, rssi, major_class);
+
+                if (major_class != 0x05) {
+                    break;
+                }
+
+                if (classic_target_found) {
+                    break;
+                }
+
+                if (gap_event_inquiry_result_get_name_available(packet)) {
+                    const uint8_t *name = gap_event_inquiry_result_get_name(packet);
+                    uint8_t name_len = gap_event_inquiry_result_get_name_len(packet);
+                    bt_classic_set_device_name(name, name_len);
+                    printf("[INQUIRY] Name: %s\n", bt_classic_get_device_name());
+                }
+
+                printf("[INQUIRY] Found HID peripheral %s!\n", bd_addr_to_str(event_addr));
+                display_log("Found BT keyboard!");
+                bd_addr_copy(classic_target_addr, event_addr);
+                classic_target_found = true;
+                stop_ble_scan();
+                bt_classic_stop_inquiry();
+            }
+            break;
+
+        case GAP_EVENT_INQUIRY_COMPLETE:
+            printf("[INQUIRY] Complete\n");
+            if (classic_target_found) {
+                printf("[INQUIRY] Connecting to stored target %s\n", bd_addr_to_str(classic_target_addr));
+                classic_target_found = false;
+                classic_prepare_retry_target(classic_target_addr);
+                bt_classic_connect(classic_target_addr);
+            } else if (current_sm_state == SM_STATE_SCANNING_CLASSIC) {
+                start_ble_scan();
+            }
+            break;
+
+        case HCI_EVENT_CONNECTION_COMPLETE:
+            {
+                uint8_t status = hci_event_connection_complete_get_status(packet);
+                uint16_t handle = hci_event_connection_complete_get_connection_handle(packet);
+                uint8_t link_type = hci_event_connection_complete_get_link_type(packet);
+                uint8_t encrypted = hci_event_connection_complete_get_encryption_enabled(packet);
+                hci_event_connection_complete_get_bd_addr(packet, event_addr);
+
+                printf("[CLASSIC] ACL connection complete: status=0x%02x handle=0x%04x addr=%s link_type=%u enc=%u\n",
+                       status, handle, bd_addr_to_str(event_addr), link_type, encrypted);
+
+                if (status != ERROR_CODE_SUCCESS && current_sm_state == SM_STATE_CLASSIC_CONNECTING) {
+                    printf("[CLASSIC] ACL connection failed, restarting discovery\n");
+                    bt_keyboard_notify_classic_disconnected();
+                    bt_keyboard_reconnect_if_needed();
+                } else if (status == ERROR_CODE_SUCCESS) {
+                    printf("[CLASSIC] ACL link up, waiting for HID channels\n");
+                }
+            }
+            break;
+
+        case HCI_EVENT_READ_REMOTE_SUPPORTED_FEATURES_COMPLETE:
+            printf("[CLASSIC] Remote supported features read complete\n");
+            break;
+
+        case HCI_EVENT_READ_REMOTE_EXTENDED_FEATURES_COMPLETE:
+            printf("[CLASSIC] Remote extended features read complete\n");
+            break;
+
+        case HCI_EVENT_PIN_CODE_REQUEST:
+            hci_event_pin_code_request_get_bd_addr(packet, classic_pin_addr);
+            printf("[CLASSIC] PIN code request for %s - scheduling '%s' response\n",
+                   bd_addr_to_str(classic_pin_addr), classic_get_active_pin());
+            display_show_message("BT PIN", classic_get_active_pin());
+            if (classic_pin_candidate_index == CLASSIC_DYNAMIC_PIN_INDEX) {
+                printf("[CLASSIC] Enter PIN %s on the keyboard now, then press Enter\n",
+                       classic_get_active_pin());
+            }
+            classic_mark_pairing_started();
+            classic_pin_timer.process = &classic_pin_timer_handler;
+            btstack_run_loop_remove_timer(&classic_pin_timer);
+            btstack_run_loop_set_timer(&classic_pin_timer, 0);
+            btstack_run_loop_add_timer(&classic_pin_timer);
+            break;
+
+        case HCI_EVENT_LINK_KEY_REQUEST:
+            hci_event_link_key_request_get_bd_addr(packet, event_addr);
+            printf("[CLASSIC] Link key request for %s - letting stack handle key lookup\n", bd_addr_to_str(event_addr));
+            break;
+
+        case HCI_EVENT_USER_CONFIRMATION_REQUEST:
+            hci_event_user_confirmation_request_get_bd_addr(packet, event_addr);
+            printf("[CLASSIC] SSP User Confirmation for %s - auto accept\n", bd_addr_to_str(event_addr));
+            classic_mark_pairing_started();
+            gap_ssp_confirmation_response(event_addr);
+            break;
+
+        case HCI_EVENT_IO_CAPABILITY_REQUEST:
+            hci_event_io_capability_request_get_bd_addr(packet, event_addr);
+            printf("[CLASSIC] IO capability request from %s\n", bd_addr_to_str(event_addr));
+            break;
+
+        case GAP_EVENT_PAIRING_STARTED:
+            printf("[CLASSIC] Pairing started\n");
+            classic_mark_pairing_started();
+            break;
+
+        case GAP_EVENT_PAIRING_COMPLETE:
+            {
+                uint8_t status = gap_event_pairing_complete_get_status(packet);
+                printf("[CLASSIC] Pairing complete, status=0x%02x\n", status);
+                classic_reset_pairing_state();
+                if (status != ERROR_CODE_SUCCESS && current_sm_state == SM_STATE_CLASSIC_CONNECTING) {
+                    if (!classic_try_next_pin("Pairing failed")) {
+                        printf("[CLASSIC] Pairing failed, returning to scan\n");
+                        bt_keyboard_notify_classic_disconnected();
+                        bt_keyboard_reconnect_if_needed();
+                    }
+                }
+            }
+            break;
+
+        case HCI_EVENT_AUTHENTICATION_COMPLETE:
+            {
+                uint8_t status = hci_event_authentication_complete_get_status(packet);
+                printf("[CLASSIC] Authentication complete, status=0x%02x\n", status);
+                if (status == ERROR_CODE_SUCCESS) {
+                    classic_reset_pairing_state();
+                }
+                if (status != ERROR_CODE_SUCCESS && current_sm_state == SM_STATE_CLASSIC_CONNECTING) {
+                    if (!classic_try_next_pin("Authentication failed")) {
+                        printf("[CLASSIC] Authentication failed, returning to scan\n");
+                        bt_keyboard_notify_classic_disconnected();
+                        bt_keyboard_reconnect_if_needed();
+                    }
+                }
+            }
+            break;
+
+        case HCI_EVENT_ENCRYPTION_CHANGE:
+            printf("[CLASSIC] Encryption change, status=0x%02x handle=0x%04x\n",
+                   packet[5], little_endian_read_16(packet, 6));
+            break;
+
+        case HCI_EVENT_ENCRYPTION_KEY_REFRESH_COMPLETE:
+            printf("[CLASSIC] Encryption key refresh complete, status=0x%02x handle=0x%04x\n",
+                   hci_event_encryption_key_refresh_complete_get_status(packet),
+                   hci_event_encryption_key_refresh_complete_get_handle(packet));
+            break;
+
+        case HCI_EVENT_LINK_KEY_NOTIFICATION:
+            printf("[CLASSIC] Link key notification\n");
+            break;
+
+        case HCI_EVENT_SIMPLE_PAIRING_COMPLETE:
+            {
+                uint8_t status = hci_event_simple_pairing_complete_get_status(packet);
+                printf("[CLASSIC] Simple pairing complete, status=0x%02x\n", status);
+                if (status == ERROR_CODE_SUCCESS) {
+                    classic_reset_pairing_state();
+                }
+                if (status != ERROR_CODE_SUCCESS
+                && current_sm_state == SM_STATE_CLASSIC_CONNECTING) {
+                    if (!classic_try_next_pin("Simple pairing failed")) {
+                        printf("[CLASSIC] Authentication failed, returning to scan\n");
+                        bt_keyboard_notify_classic_disconnected();
+                        bt_keyboard_reconnect_if_needed();
+                    }
+                }
+            }
             break;
 
         case GAP_EVENT_ADVERTISING_REPORT:
@@ -500,18 +938,15 @@ static void packet_handler(uint8_t packet_type, uint16_t channel,
 
                 gap_event_advertising_report_get_address(packet, event_addr);
                 printf("Found HID keyboard %s!\n", bd_addr_to_str(event_addr));
-                display_log("Found keyboard!");
-                gap_stop_scan();
-                scanning = false;
+                display_log("Found BLE keyboard!");
+                stop_ble_scan();
                 bd_addr_copy(target_addr, event_addr);
                 has_target = true;
                 uint8_t addr_type = gap_event_advertising_report_get_address_type(packet);
                 uint8_t err = gap_connect(target_addr, addr_type);
                 if (err != ERROR_CODE_SUCCESS) {
                     printf("gap_connect failed: 0x%02x, rescanning\n", err);
-                    gap_start_scan();
-                    scanning = true;
-                    set_sm_state(SM_STATE_SCANNING);
+                    start_ble_scan();
                 } else {
                     set_sm_state(SM_STATE_CONNECTING);
                 }
@@ -542,9 +977,7 @@ static void packet_handler(uint8_t packet_type, uint16_t channel,
                         set_sm_state(SM_STATE_PAIRING);
                     } else {
                         printf("LE connection failed: status 0x%02x\n", status);
-                        scanning = true;
-                        gap_start_scan();
-                        set_sm_state(SM_STATE_SCANNING);
+                        start_ble_scan();
                     }
                 } else if (subevent == HCI_SUBEVENT_LE_CONNECTION_UPDATE_COMPLETE) {
                     printf("[LE_CONN_UPDATE] Connection parameters updated\n");
@@ -567,10 +1000,14 @@ static void packet_handler(uint8_t packet_type, uint16_t channel,
                 uint16_t handle = hci_event_disconnection_complete_get_connection_handle(packet);
                 uint8_t reason = hci_event_disconnection_complete_get_reason(packet);
                 display_log("Disconnected!");
-                printf("Disconnected handle 0x%04x (reason: 0x%02x) - resetting and waiting before rescan\n",
-                       handle, reason);
+                printf("Disconnected handle 0x%04x (reason: 0x%02x)\n", handle, reason);
 
-                // Reset all connection state to simulate a fresh start
+                btstack_run_loop_remove_timer(&classic_connect_timer);
+                if (!classic_retry_pending) {
+                    btstack_run_loop_remove_timer(&classic_retry_timer);
+                }
+                classic_reset_pairing_state();
+
                 connected = false;
                 has_prev_report = false;
                 has_target = false;
@@ -579,54 +1016,6 @@ static void packet_handler(uint8_t packet_type, uint16_t channel,
                 le_connection_handle = HCI_CON_HANDLE_INVALID;
 
                 set_sm_state(SM_STATE_IDLE);
-
-                // Wait a bit before rescanning to let BT stack clean up
-                // We'll rely on the heartbeat timer to restart scanning
-            }
-            break;
-
-        case GATTSERVICE_SUBEVENT_HID_SERVICE_CONNECTED:
-            {
-                uint8_t hid_status = gattservice_subevent_hid_service_connected_get_status(packet);
-                if (hid_status == ERROR_CODE_SUCCESS) {
-                    printf("HID service connected!\n");
-
-                    // Try to get HID report descriptor - add debug info
-                    printf("Attempting to get HID descriptor, hids_cid=%u\n", hids_cid);
-                    display_log("Getting HID descriptor");
-
-                    const uint8_t *hid_descriptor = hids_client_descriptor_storage_get_descriptor_data(hids_cid, 0);
-                    printf("Descriptor pointer: %p\n", (void*)hid_descriptor);
-
-                    if (hid_descriptor) {
-                        hid_descriptor_len = hids_client_descriptor_storage_get_descriptor_len(hids_cid, 0);
-                        printf("HID descriptor available (%u bytes)\n", hid_descriptor_len);
-
-                        if (hid_descriptor_len > 0) {
-                            memcpy(hid_descriptor_storage, hid_descriptor,
-                                   hid_descriptor_len > HID_DESCRIPTOR_STORAGE_SIZE ? HID_DESCRIPTOR_STORAGE_SIZE : hid_descriptor_len);
-                            hid_descriptor_available = true;
-
-                            // Show first few bytes of descriptor
-                            printf("Descriptor first bytes: ");
-                            for (int i = 0; i < (hid_descriptor_len < 16 ? hid_descriptor_len : 16); i++) {
-                                printf("%02x ", hid_descriptor[i]);
-                            }
-                            printf("\n");
-                        }
-                    } else {
-                        printf("No HID descriptor available - using standard keyboard mappings\n");
-                        hid_descriptor_available = false;
-                    }
-
-                    connected = true;
-                    report_subscription_active = true;
-                    last_hid_report_time = to_ms_since_boot(get_absolute_time());
-                    set_sm_state(SM_STATE_CONNECTED);
-                } else {
-                    printf("HID service connect failed: 0x%02x\n", hid_status);
-                    gap_disconnect(le_connection_handle);
-                }
             }
             break;
 
@@ -804,7 +1193,6 @@ int btstack_main(int argc, const char *argv[])
     l2cap_init();
     sm_init();
 
-    // Initialize LE device database for bonding storage
     le_device_db_init();
 
     sm_set_io_capabilities(IO_CAPABILITY_NO_INPUT_NO_OUTPUT);
@@ -812,6 +1200,8 @@ int btstack_main(int argc, const char *argv[])
 
     gatt_client_init();
     hids_client_init(hid_descriptor_storage, HID_DESCRIPTOR_STORAGE_SIZE);
+
+    bt_classic_init();
 
     hci_event_callback_registration.callback = &packet_handler;
     hci_add_event_handler(&hci_event_callback_registration);
@@ -831,17 +1221,14 @@ void bt_keyboard_init(void)
 
 bool bt_keyboard_reconnect_if_needed(void)
 {
-    // If we're in IDLE state and not scanning, start scanning
-    extern sm_state_t current_sm_state;
+    if (classic_retry_pending) {
+        return false;
+    }
     if (current_sm_state == SM_STATE_IDLE && !scanning) {
-        printf("[RECONNECT] Time to rescan for keyboard\n");
-        gap_set_scan_parameters(1, 0x100, 0x50);
-        gap_start_scan();
-        scanning = true;
-        set_sm_state(SM_STATE_SCANNING);
+        printf("[RECONNECT] Starting dual-mode scan\n");
+        start_ble_scan();
         return true;
     }
-
     return false;
 }
 
@@ -852,39 +1239,34 @@ bool bt_keyboard_is_connected(void)
 
 void bt_keyboard_start_pairing(void)
 {
-    extern sm_state_t current_sm_state;
-    extern hci_con_handle_t le_connection_handle;
-    extern bool scanning;
-    extern bool connected;
-    
     printf("[PAIRING] Manual pairing triggered\n");
-    
-    // Disconnect if connected
+
+    classic_pin_candidate_index = 0;
+    classic_dynamic_attempts = 0;
+    classic_retry_addr_valid = false;
+    classic_retry_pending = false;
+    btstack_run_loop_remove_timer(&classic_retry_timer);
+    classic_reset_pairing_state();
+
+    if (bt_classic_is_connected()) {
+        printf("[PAIRING] Disconnecting classic keyboard\n");
+        bt_classic_disconnect();
+    }
+
     if (connected && le_connection_handle != HCI_CON_HANDLE_INVALID) {
-        printf("[PAIRING] Disconnecting current keyboard\n");
+        printf("[PAIRING] Disconnecting BLE keyboard\n");
         gap_disconnect(le_connection_handle);
         connected = false;
         le_connection_handle = HCI_CON_HANDLE_INVALID;
     }
-    
-    // Stop scanning if currently scanning
-    if (scanning) {
-        printf("[PAIRING] Stopping current scan\n");
-        gap_stop_scan();
-        scanning = false;
-    }
-    
-    // Reset to IDLE state
+
+    stop_ble_scan();
     set_sm_state(SM_STATE_IDLE);
-    
-    // Start fresh scan for new keyboard
-    printf("[PAIRING] Starting scan for new keyboard\n");
+
+    printf("[PAIRING] Starting dual-mode scan\n");
     printf("[PAIRING] Put your keyboard in pairing mode now!\n");
     display_log("Pairing mode active");
-    gap_set_scan_parameters(1, 0x100, 0x50);
-    gap_start_scan();
-    scanning = true;
-    set_sm_state(SM_STATE_SCANNING);
+    start_ble_scan();
 }
 
 const char* bt_keyboard_get_device_name(void) {
