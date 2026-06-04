@@ -16,23 +16,37 @@ static struct {
         uint8_t reg;
         uint8_t data;
     } read_buffer;
+    uint8_t selected_reg;
+    bool has_selected_reg;
     uint8_t write_buffer[2];
     uint8_t write_len;
 } self;
 
 static void irq_handler(void)
 {
-    // The controller sent data
-    if (self.i2c->hw->intr_stat & I2C_IC_INTR_MASK_M_RX_FULL_BITS) {
+    uint32_t intr_stat = self.i2c->hw->intr_stat;
+    if (intr_stat == 0) {
+        return;
+    }
+
+    // Drain all received bytes for this transaction.
+    while (self.i2c->hw->status & I2C_IC_STATUS_RFNE_BITS) {
+        uint8_t rx_byte = self.i2c->hw->data_cmd & 0xff;
+
         if (self.read_buffer.reg == REG_ID_INVALID) {
-            self.read_buffer.reg = self.i2c->hw->data_cmd & 0xff;
+            self.read_buffer.reg = rx_byte;
 
             if (self.read_buffer.reg & PACKET_WRITE_MASK) {
-                // It's a reg write, we need to wait for the second byte before we process
-                return;
+                // Register write: wait for the payload byte.
+                continue;
             }
+
+            // Register select for a following read request.
+            self.selected_reg = self.read_buffer.reg;
+            self.has_selected_reg = true;
+            self.read_buffer.data = 0;
         } else {
-            self.read_buffer.data = self.i2c->hw->data_cmd & 0xff;
+            self.read_buffer.data = rx_byte;
         }
 
         reg_process_packet(
@@ -41,16 +55,33 @@ static void irq_handler(void)
             self.write_buffer,
             &self.write_len);
 
-        // Ready for the next operation
+        // Ready for the next operation.
         self.read_buffer.reg = REG_ID_INVALID;
-        return;
     }
 
-    // The controller requested a read
-    if (self.i2c->hw->intr_stat & I2C_IC_INTR_MASK_M_RD_REQ_BITS) {
+    // The controller requested a read. This can happen in the same IRQ as RX_FULL.
+    if (intr_stat & I2C_IC_INTR_MASK_M_RD_REQ_BITS) {
+        // Some hosts issue separate register-select and read phases.
+        if (self.write_len == 0 && self.has_selected_reg) {
+            reg_process_packet(
+                self.selected_reg,
+                0,
+                self.write_buffer,
+                &self.write_len);
+        }
+
+        if (self.write_len == 0) {
+            self.write_buffer[0] = 0;
+            self.write_len = 1;
+        }
+
         i2c_write_raw_blocking(self.i2c, self.write_buffer, self.write_len);
-        self.i2c->hw->clr_rd_req;
-        return;
+        (void)self.i2c->hw->clr_rd_req;
+    }
+
+    // Clear TX abort if any occurred to keep the peripheral responsive.
+    if (intr_stat & I2C_IC_INTR_MASK_M_TX_ABRT_BITS) {
+        (void)self.i2c->hw->clr_tx_abrt;
     }
 }
 
@@ -76,11 +107,14 @@ void i2c_slave_init(void)
     // Initialize read buffer
     self.read_buffer.reg = REG_ID_INVALID;
     self.read_buffer.data = 0;
+    self.selected_reg = REG_ID_INVALID;
+    self.has_selected_reg = false;
     self.write_len = 0;
 
     // IRQ when the controller sends data, and when it requests a read
     self.i2c->hw->intr_mask = I2C_IC_INTR_MASK_M_RD_REQ_BITS
-                            | I2C_IC_INTR_MASK_M_RX_FULL_BITS;
+                            | I2C_IC_INTR_MASK_M_RX_FULL_BITS
+                            | I2C_IC_INTR_MASK_M_TX_ABRT_BITS;
 
     const int irq = I2C0_IRQ + i2c_hw_index(self.i2c);
     irq_set_exclusive_handler(irq, irq_handler);

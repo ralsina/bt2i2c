@@ -451,9 +451,13 @@ static void process_hid_report(const uint8_t *report_buf, uint16_t buf_len, uint
 void bt_keyboard_classic_report(const uint8_t *report, uint16_t len) {
     if (connected) {
         uint8_t report_id = 0;
-        // Many Classic keyboards prepend report_id before the 8-byte keyboard payload.
-        // If present, let process_hid_report strip it via report_id/offset logic.
-        if (len > HID_REPORT_SIZE && report[0] != 0) {
+        // Classic BT: Report ID is at the start if:
+        // 1. Buffer is > 8 bytes (has extra byte)
+        // 2. First byte is a valid report ID (not a modifier byte)
+        // Valid report IDs for keyboards are typically 0x01-0x0F or 0x81-0x8F
+        // Modifier keys are 0x01-0x20, so we need to be careful
+        // Only treat byte as report ID if it looks like a report ID descriptor
+        if (len == 9 && (report[0] == 1 || report[0] == 2)) {
             report_id = report[0];
         }
         process_hid_report(report, len, report_id);
@@ -563,124 +567,112 @@ static char hid_code_to_char(uint8_t code, uint8_t modifiers, bool capslock)
     return c;
 }
 
+static uint8_t hid_code_to_fifo_key(uint8_t code, uint8_t modifiers, bool capslock)
+{
+    char translated = hid_code_to_char(code, modifiers, capslock);
+    if (translated != 0) {
+        return (uint8_t)translated;
+    }
+
+    // Fallback for non-printable keys: keep HID code for compatibility.
+    return code;
+}
+
 static void process_hid_report(const uint8_t *report_buf, uint16_t buf_len, uint8_t report_id)
 {
-    uint8_t offset = (report_id > 0 && buf_len > 0 && report_buf[0] == report_id) ? 1 : 0;
+    // For HID keyboard reports:
+    // - Standard format (no report ID): 8 bytes [modifiers, reserved, key1-6]
+    // - With report ID: 9 bytes [report_id, modifiers, reserved, key1-6]
+    //
+    // We should only skip a byte if:
+    // 1. Buffer is exactly 9 bytes (not variable length)
+    // 2. AND report_id was explicitly set (not auto-detected from first byte)
+    //
+    // The offset logic should check if the first byte matches what we expect:
+    // - If report_id=0 (no report ID prefix), offset should be 0
+    // - If report_id>0 AND report_buf[0]=report_id, then offset should be 1
+    uint8_t offset = 0;
+    if (report_id > 0 && buf_len > 0 && report_buf[0] == report_id) {
+        offset = 1;
+    }
     const uint8_t *report = report_buf + offset;
     uint16_t len = buf_len - offset;
 
+    printf("[HID_PROCESS] buf_len=%d, offset=%d, len=%d, report_id=0x%02x\n",
+           buf_len, offset, len, report_id);
+
     if (len < HID_REPORT_SIZE) {
+        printf("[HID_PROCESS] Rejecting report: len(%d) < HID_REPORT_SIZE(%d)\n", len, HID_REPORT_SIZE);
         return;
     }
 
     uint8_t modifiers = report[0];
     uint8_t prev_mod = has_prev_report ? prev_report[0] : 0;
 
-    // Check for Fn key state (0x9D in the key array)
-    bool fn_now_pressed = find_in_report(report, HID_KEY_FN);
-    bool fn_was_pressed = has_prev_report && find_in_prev(HID_KEY_FN);
-    fn_pressed = fn_now_pressed;
-
-    // Handle Fn key combinations by converting them to function keys
-    uint8_t modified_report[HID_REPORT_SIZE];
-    memcpy(modified_report, report, HID_REPORT_SIZE);
-
-    if (fn_now_pressed && !fn_was_pressed) {
-        // Fn was just pressed, look for keys that should become function keys
-        for (int i = 2; i < HID_REPORT_SIZE; i++) {
-            if (report[i] >= 0x04 && report[i] <= 0x1D) {
-                // Letters A-Z: Handle potential Fn shortcuts
-                switch(report[i]) {
-                    case 0x04: modified_report[i] = 0x3A; break; // A+Fn -> F1
-                    case 0x05: modified_report[i] = 0x3B; break; // B+Fn -> F2
-                    case 0x06: modified_report[i] = 0x3C; break; // C+Fn -> F3
-                    case 0x07: modified_report[i] = 0x3D; break; // D+Fn -> F4
-                    case 0x08: modified_report[i] = 0x3E; break; // E+Fn -> F5
-                    case 0x09: modified_report[i] = 0x3F; break; // F+Fn -> F6
-                    case 0x0A: modified_report[i] = 0x40; break; // G+Fn -> F7
-                    case 0x0B: modified_report[i] = 0x41; break; // H+Fn -> F8
-                    case 0x0C: modified_report[i] = 0x42; break; // I+Fn -> F9
-                    case 0x0D: modified_report[i] = 0x43; break; // J+Fn -> F10
-                    case 0x0E: modified_report[i] = 0x44; break; // K+Fn -> F11
-                    case 0x0F: modified_report[i] = 0x45; break; // L+Fn -> F12
-                }
-            } else if (report[i] >= 0x1E && report[i] <= 0x27) {
-                // Numbers 1-0: Handle Fn+number -> function keys
-                switch(report[i]) {
-                    case 0x1E: modified_report[i] = 0x3A; break; // 1+Fn -> F1
-                    case 0x1F: modified_report[i] = 0x3B; break; // 2+Fn -> F2
-                    case 0x20: modified_report[i] = 0x3C; break; // 3+Fn -> F3
-                    case 0x21: modified_report[i] = 0x3D; break; // 4+Fn -> F4
-                    case 0x22: modified_report[i] = 0x3E; break; // 5+Fn -> F5
-                    case 0x23: modified_report[i] = 0x3F; break; // 6+Fn -> F6
-                    case 0x24: modified_report[i] = 0x40; break; // 7+Fn -> F7
-                    case 0x25: modified_report[i] = 0x41; break; // 8+Fn -> F8
-                    case 0x26: modified_report[i] = 0x42; break; // 9+Fn -> F9
-                    case 0x27: modified_report[i] = 0x43; break; // 0+Fn -> F10
-                }
-            }
-        }
-        // Remove Fn key from the report since we've processed it
-        for (int i = 2; i < HID_REPORT_SIZE; i++) {
-            if (modified_report[i] == HID_KEY_FN) {
-                modified_report[i] = 0;
-                break;
-            }
-        }
-    }
-
-    // Use the modified report for FIFO enqueue and processing
-    const uint8_t *final_report = fn_pressed ? modified_report : report;
+    // Forward raw HID keycodes to the I2C FIFO for protocol compatibility.
+    fn_pressed = find_in_report(report, HID_KEY_FN);
+    const uint8_t *final_report = report;
 
     printf("[HCI_REPORT] rid=%u mod=0x%02x keys=", report_id, modifiers);
     for (int i = 2; i < HID_REPORT_SIZE; i++) {
         if (final_report[i]) printf("0x%02x ", final_report[i]);
     }
     printf("\n");
+    printf("[HCI_RAW_REPORT] offset=%d, len=%d, raw_bytes: ", 
+           (report - report_buf), len);
+    for (int i = 0; i < len && i < HID_REPORT_SIZE; i++) {
+        printf("0x%02x ", report[i]);
+    }
+    printf("\n");
 
     // Enqueue key events into I2C slave FIFO
     uint8_t mod_changes = modifiers ^ prev_mod;
-    if (mod_changes & (HID_MOD_LCTRL | HID_MOD_RCTRL)) {
-        struct fifo_item item = {
-            .key = KEY_MOD_SYM,
-            .state = (modifiers & (HID_MOD_LCTRL | HID_MOD_RCTRL))
-                ? KEY_STATE_PRESSED : KEY_STATE_RELEASED,
-        };
-        fifo_enqueue_force(item);
-    }
-    if (mod_changes & (HID_MOD_LSHIFT | HID_MOD_RSHIFT)) {
-        struct fifo_item item = {
-            .key = KEY_MOD_SHL,
-            .state = (modifiers & (HID_MOD_LSHIFT | HID_MOD_RSHIFT))
-                ? KEY_STATE_PRESSED : KEY_STATE_RELEASED,
-        };
-        fifo_enqueue_force(item);
-    }
-    if (mod_changes & (HID_MOD_LALT | HID_MOD_RALT)) {
-        struct fifo_item item = {
-            .key = KEY_MOD_ALT,
-            .state = (modifiers & (HID_MOD_LALT | HID_MOD_RALT))
-                ? KEY_STATE_PRESSED : KEY_STATE_RELEASED,
-        };
-        fifo_enqueue_force(item);
+    if (reg_is_bit_set(REG_ID_CFG, CFG_REPORT_MODS)) {
+        if (mod_changes & (HID_MOD_LCTRL | HID_MOD_RCTRL)) {
+            struct fifo_item item = {
+                .key = KEY_MOD_SYM,
+                .state = (modifiers & (HID_MOD_LCTRL | HID_MOD_RCTRL))
+                    ? KEY_STATE_PRESSED : KEY_STATE_RELEASED,
+            };
+            fifo_enqueue_force(item);
+        }
+        if (mod_changes & (HID_MOD_LSHIFT | HID_MOD_RSHIFT)) {
+            struct fifo_item item = {
+                .key = KEY_MOD_SHL,
+                .state = (modifiers & (HID_MOD_LSHIFT | HID_MOD_RSHIFT))
+                    ? KEY_STATE_PRESSED : KEY_STATE_RELEASED,
+            };
+            fifo_enqueue_force(item);
+        }
+        if (mod_changes & (HID_MOD_LALT | HID_MOD_RALT)) {
+            struct fifo_item item = {
+                .key = KEY_MOD_ALT,
+                .state = (modifiers & (HID_MOD_LALT | HID_MOD_RALT))
+                    ? KEY_STATE_PRESSED : KEY_STATE_RELEASED,
+            };
+            fifo_enqueue_force(item);
+        }
     }
 
     for (int i = 2; i < HID_REPORT_SIZE; i++) {
         uint8_t code = final_report[i];
-        if (code == 0 || code == HID_KEY_CAPSLOCK) continue;
+        if (code == 0 || code == HID_KEY_CAPSLOCK || code == HID_KEY_FN) continue;
         if (has_prev_report && find_in_prev(code)) continue;
 
-        struct fifo_item item = { .key = code, .state = KEY_STATE_PRESSED };
+        uint8_t fifo_key = hid_code_to_fifo_key(code, modifiers, capslock);
+        struct fifo_item item = { .key = fifo_key, .state = KEY_STATE_PRESSED };
         fifo_enqueue_force(item);
+        printf("[FIFO_ENQUEUE] Pressed: hid=0x%02x fifo=0x%02x count=%d\n", code, fifo_key, fifo_count());
     }
 
     if (has_prev_report) {
         for (int i = 2; i < HID_REPORT_SIZE; i++) {
             uint8_t code = prev_report[i];
-            if (code == 0 || code == HID_KEY_CAPSLOCK) continue;
+            if (code == 0 || code == HID_KEY_CAPSLOCK || code == HID_KEY_FN) continue;
             if (find_in_report(report, code)) continue;
 
-            struct fifo_item item = { .key = code, .state = KEY_STATE_RELEASED };
+            uint8_t fifo_key = hid_code_to_fifo_key(code, prev_mod, capslock);
+            struct fifo_item item = { .key = fifo_key, .state = KEY_STATE_RELEASED };
             fifo_enqueue_force(item);
         }
     }
@@ -692,7 +684,7 @@ static void process_hid_report(const uint8_t *report_buf, uint16_t buf_len, uint
 
     for (int i = 2; i < HID_REPORT_SIZE; i++) {
         uint8_t code = final_report[i];
-        if (code == 0 || code == HID_KEY_CAPSLOCK) continue;
+        if (code == 0 || code == HID_KEY_CAPSLOCK || code == HID_KEY_FN) continue;
         if (has_prev_report && find_in_prev(code)) continue;
 
         inject_key(code, modifiers, KEY_STATE_PRESSED);
@@ -701,7 +693,7 @@ static void process_hid_report(const uint8_t *report_buf, uint16_t buf_len, uint
     if (has_prev_report) {
         for (int i = 2; i < HID_REPORT_SIZE; i++) {
             uint8_t code = prev_report[i];
-            if (code == 0 || code == HID_KEY_CAPSLOCK) continue;
+            if (code == 0 || code == HID_KEY_CAPSLOCK || code == HID_KEY_FN) continue;
             if (find_in_report(report, code)) continue;
 
             inject_key(code, prev_mod, KEY_STATE_RELEASED);
