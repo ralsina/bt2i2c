@@ -1,58 +1,50 @@
-# BT2UART Bridge
+# bt2i2c — Bluetooth to I2C Keyboard Bridge
 
-A Pico W that connects to a BLE HID keyboard and forwards keystrokes
-over UART to a host (e.g. another Pico, ESP8266, etc.).
+A Pico W that connects to BLE and Classic Bluetooth HID keyboards and
+forwards keystrokes over I2C to a host, with an SPI display showing
+connection status.
 
 ## How It Works
 
 ```
-BLE Keyboard  ──[Bluetooth LE]──>  Pico W (bt2uart)
-                                      │
-                                      │ UART1 (GP4 TX, GP5 RX, 115200 baud)
-                                      │ Frame: [0xFE] [8-byte HID report]
-                                      ▼
-                                  Host (e.g. Pico Receiver)
-                                      │
-                                      │ USB serial
-                                      ▼
-                              Your computer (minicom/putty)
+BLE Keyboard ──[Bluetooth LE/BT Classic]──>  Pico W (bt2i2c)
+                                                │
+                                      ┌─────────┼──────────┐
+                                      ▼         ▼          ▼
+                                  Display    I2C slave   UART debug
+                                  (SPI)      (GP4/GP5)    (USB serial)
 ```
 
 ## Wiring
 
-### Sender (Pico W running `bt2uart`)
+### Pico W
 
-| Sender Pico W  | Connect to       | Pin |
-|----------------|------------------|-----|
-| GP4 (UART1 TX) | Host RX          | 6   |
-| GP5 (UART1 RX) | Host TX (opt.)   | 7   |
-| GND            | Host GND         | 38  |
-| USB            | Computer (debug) |     |
+| Function   | GPIO | Pin | Connected to       |
+|------------|------|-----|--------------------|
+| I2C0 SDA   | GP4  | 6   | Host SDA           |
+| I2C0 SCL   | GP5  | 7   | Host SCL           |
+| GND        | GND  | 38  | Host GND           |
+| USB        | —    | —   | Computer (debug)   |
 
-### Receiver (Pico running `pico_receiver`)
+### Display (ST7789, 240×240 round SPI)
 
-| Receiver Pico  | Connect to       | Pin |
-|----------------|------------------|-----|
-| GP5 (UART1 RX) | Sender TX (GP4)  | 7   |
-| GND            | Sender GND       | 38  |
-| USB            | Computer (log)   |     |
+| Display label | GPIO | Pin | Notes                |
+|---------------|------|-----|----------------------|
+| VCC           | VSYS | 39  | 5V (onboard reg)     |
+| GND           | GND  | 38  |                      |
+| SCL (SCK)     | GP2  | 4   | SPI0 clock           |
+| SDA (MOSI)    | GP3  | 5   | SPI0 data            |
+| RES           | GP14 | 19  | Reset                |
+| DC            | GP16 | 21  | Data/Command select  |
+| BL            | —    | —   | Backlight (optional) |
 
-**Minimal connection**: sender GP4 → receiver GP5 + common GND (2 wires).
-
-Both Picos can be powered and debugged via their own USB cables simultaneously.
+No CS pin needed — the display module ties CS to GND internally.
 
 ## Building & Flashing
 
-### Sender
 ```sh
-cd build && cmake .. && make bt2uart
-# Flash build/src/bt2uart.uf2 to Pico W
-```
-
-### Receiver
-```sh
-cd build && cmake .. && make pico_receiver
-# Flash build/host/pico_receiver/pico_receiver.uf2 to Pico
+cd build && cmake .. && make bt2i2c_ble
+# Flash build/src/bt2i2c_ble.uf2 to Pico W
 ```
 
 ## UART Protocol
@@ -87,7 +79,9 @@ next 0xFE re-syncs (no checksum needed).
 
 ## Notes
 
-- **GP0 conflict**: Pico W's CYW43 uses GP0 for SPI — do not use GP0/GP1
-  for UART. GP4/GP5 are safe.
-- **Power**: Each Pico powered via its own USB. Do not connect VSYS to host 3.3V.
-- **Baud rate**: 115200 — change `UART_BAUD` in `src/pins.h` if needed.
+- **GP0/GP1 conflict**: Pico W's CYW43 uses GP0/GP1 for SPI flash — do not use
+  these pins for anything.
+- **Display VCC**: VSYS (~5V) works if the display module has an onboard
+  regulator. For modules without one, use 3.3V (Pin 36) instead.
+- **Power**: Powered via USB for debugging. Host connection is I2C (3.3V
+  logic, 4.7kΩ pull-ups recommended on SDA/SCL).
