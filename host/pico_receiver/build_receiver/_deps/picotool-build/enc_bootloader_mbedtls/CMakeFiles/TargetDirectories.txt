@@ -1,2 +1,0 @@
-/home/ralsina/code/terminado/bt2i2c/host/pico_receiver/build_receiver/_deps/picotool-build/enc_bootloader_mbedtls/CMakeFiles/edit_cache.dir
-/home/ralsina/code/terminado/bt2i2c/host/pico_receiver/build_receiver/_deps/picotool-build/enc_bootloader_mbedtls/CMakeFiles/rebuild_cache.dir

@@ -2,9 +2,13 @@
 
 BLE HID keyboard → Pico W → I2C → Host.
 
-Connects to a Bluetooth LE keyboard and forwards keystrokes as an I2C
+Connects to a Bluetooth keyboard and forwards keystrokes as an I2C
 slave using the standard [i2c_puppet](https://github.com/grymoire/i2c_puppet-Linux)
-register protocol. Compatible with Arduino/CircuitPython BBQ10KBD libraries.
+register protocol.
+
+This firmware emulates a BBQ20-compatible I2C keyboard endpoint at address `0x1F`.
+Use existing BBQ20 host support (for example Arduino/CircuitPython BBQ10KBD
+libraries and other i2c_puppet-compatible clients) on the host side.
 
 ## Quick Start
 

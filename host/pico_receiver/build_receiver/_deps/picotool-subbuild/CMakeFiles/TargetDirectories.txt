@@ -1,3 +1,0 @@
-/home/ralsina/code/terminado/bt2i2c/host/pico_receiver/build_receiver/_deps/picotool-subbuild/CMakeFiles/picotool-populate.dir
-/home/ralsina/code/terminado/bt2i2c/host/pico_receiver/build_receiver/_deps/picotool-subbuild/CMakeFiles/edit_cache.dir
-/home/ralsina/code/terminado/bt2i2c/host/pico_receiver/build_receiver/_deps/picotool-subbuild/CMakeFiles/rebuild_cache.dir

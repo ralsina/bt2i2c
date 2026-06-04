@@ -1,7 +1,0 @@
-{
-	"InstallScripts" : 
-	[
-		"/home/ralsina/code/terminado/bt2i2c/host/pico_receiver/build_receiver/_deps/picotool-build/enc_bootloader_mbedtls/cmake_install.cmake"
-	],
-	"Parallel" : false
-}
