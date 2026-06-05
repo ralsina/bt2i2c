@@ -574,7 +574,17 @@ static uint8_t hid_code_to_fifo_key(uint8_t code, uint8_t modifiers, bool capslo
         return (uint8_t)translated;
     }
 
-    // Fallback for non-printable keys: keep HID code for compatibility.
+    // Map non-printable HID codes to extended key range (0x80+)
+    // to avoid collisions with printable ASCII.
+    if (code >= 0x3a && code <= 0x52) {
+        // F1-F12 (0x3a-0x45), PrintScreen..Up arrow (0x46-0x52)
+        return KEY_EXT_F1 + (code - 0x3a);
+    }
+    if (code == HID_KEY_ESCAPE) {
+        return KEY_EXT_ESC;
+    }
+
+    // Other non-printable keys: keep raw HID code as fallback.
     return code;
 }
 

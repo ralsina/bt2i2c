@@ -52,4 +52,44 @@ address.
 I2C at 100kHz, address `0x1F`. Internal pull-ups enabled (external 4.7kΩ
 recommended for longer wires).
 
+### Extended Keycodes (Protocol Extension)
+
+Standard BBQ20 firmware uses ASCII codes (0x20-0x7E) for printable keys and
+control codes (0x01-0x1D) for modifier/joystick keys. This firmware adds
+keys that a full keyboard has (Escape, cursor arrows, F-keys, etc.) using
+a **protocol extension**: codes in the 0x80+ range.
+
+| Code | Key |
+|------|-----|
+| 0x80 | Escape |
+| 0x81 | F1 |
+| 0x82 | F2 |
+| 0x83 | F3 |
+| 0x84 | F4 |
+| 0x85 | F5 |
+| 0x86 | F6 |
+| 0x87 | F7 |
+| 0x88 | F8 |
+| 0x89 | F9 |
+| 0x8A | F10 |
+| 0x8B | F11 |
+| 0x8C | F12 |
+| 0x8D | Print Screen |
+| 0x8E | Scroll Lock |
+| 0x8F | Pause |
+| 0x90 | Insert |
+| 0x91 | Home |
+| 0x92 | Page Up |
+| 0x93 | Delete |
+| 0x94 | End |
+| 0x95 | Page Down |
+| 0x96 | Right Arrow |
+| 0x97 | Left Arrow |
+| 0x98 | Down Arrow |
+| 0x99 | Up Arrow |
+
+Host libraries that understand this extension can decode these codes
+directly. Legacy BBQ20 hosts will see values ≥ 0x80 and can treat them
+as unknown/unmapped keys.
+
 See [HARDWARE.md](HARDWARE.md) for wiring details.
